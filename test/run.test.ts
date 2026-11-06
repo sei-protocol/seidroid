@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emptyStats, piArgs, tally } from "../src/run.ts";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { emptyStats, piArgs, run, tally } from "../src/run.ts";
 
 test("tally sums usage over finished assistant messages", () => {
   const s = emptyStats();
@@ -19,4 +22,24 @@ test("piArgs loads nothing from the checkout and offers only read tools", () => 
   assert.equal(a[a.indexOf("--tools") + 1], "read,grep,find,ls,submit_review");
   assert.deepEqual(a.slice(-4), ["--session-dir", "/s", "--session-id", "seidroid"]);
   assert.equal(piArgs("scout", "openai/gpt", "high").at(-1), "--no-session");
+});
+
+test("run records a failed credential request in run.json without starting pi", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "run-"));
+  const saved = { ...process.env };
+  Object.assign(process.env, {
+    ANTHROPIC_FEDERATION_RULE_ID: "rule",
+    ANTHROPIC_IDENTITY_TOKEN_FILE: path.join(dir, "token"),
+    ACTIONS_ID_TOKEN_REQUEST_URL: "http://127.0.0.1:1/token?x=1",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer",
+  });
+  try {
+    await run({ role: "scout", request: { repo: "o/r", pr: 1, diffLines: 1 }, outDir: dir, model: "m", thinking: "high", timeoutMs: 1000 });
+  } finally {
+    process.env = saved;
+  }
+  const got = JSON.parse(readFileSync(path.join(dir, "run.json"), "utf8"));
+  assert.equal(got.submitted, false);
+  assert.equal(got.exitCode, null);
+  assert.match(got.error, /^no model credential/);
 });

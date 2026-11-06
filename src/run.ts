@@ -12,6 +12,7 @@ const PI = path.join(HERE, "..", "node_modules", "@earendil-works", "pi-coding-a
 const SESSION_ID = "seidroid";
 const OIDC_AUDIENCE = "https://api.anthropic.com";
 const OIDC_REFRESH_MS = 4 * 60_000;
+const OIDC_REQUEST_MS = 30_000;
 /** Credentials the model's process never needs; the runner keeps them to itself. */
 const WITHHELD_ENV = ["ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
 
@@ -74,7 +75,10 @@ async function keepIdentityTokenFresh(): Promise<() => void> {
   const bearer = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!file || !url || !bearer || !process.env.ANTHROPIC_FEDERATION_RULE_ID) return () => {};
   const write = async () => {
-    const res = await fetch(`${url}&audience=${encodeURIComponent(OIDC_AUDIENCE)}`, { headers: { Authorization: `Bearer ${bearer}` } });
+    const res = await fetch(`${url}&audience=${encodeURIComponent(OIDC_AUDIENCE)}`, {
+      headers: { Authorization: `Bearer ${bearer}` },
+      signal: AbortSignal.timeout(OIDC_REQUEST_MS),
+    });
     if (!res.ok) throw new Error(`the GitHub OIDC token request failed with ${res.status}`);
     const { value } = (await res.json()) as { value: string };
     writeFileSync(file, value, { mode: 0o600 });
@@ -98,9 +102,18 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role };
   for (const k of WITHHELD_ENV) delete env[k];
 
-  const stopRefresh = await keepIdentityTokenFresh();
   const started = Date.now();
   const stats = emptyStats();
+  const record = (exitCode: number | null, submitted: boolean) =>
+    writeFileSync(path.join(o.outDir, "run.json"), JSON.stringify({ role: o.role, model: o.model, submitted, exitCode, durationMs: Date.now() - started, ...stats }));
+
+  let stopRefresh: () => void;
+  try {
+    stopRefresh = await keepIdentityTokenFresh();
+  } catch (e) {
+    stats.error = `no model credential: ${e instanceof Error ? e.message : String(e)}`;
+    return record(null, false);
+  }
   const child = spawn(process.execPath, [PI, ...piArgs(o.role, o.model, o.thinking, o.sessionDir)], { env, stdio: ["pipe", "pipe", "inherit"] });
   const timer = setTimeout(() => {
     stats.error = `timed out after ${o.timeoutMs / 1000}s`;
@@ -121,7 +134,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
 
   const submitted = existsSync(submission);
   if (!submitted && stats.error === "") stats.error = code === 0 ? `the model ended without calling ${submitTool(o.role)}` : `pi exited with ${code}`;
-  writeFileSync(path.join(o.outDir, "run.json"), JSON.stringify({ role: o.role, model: o.model, submitted, exitCode: code, durationMs: Date.now() - started, ...stats }));
+  record(code, submitted);
 }
 
 async function main(): Promise<void> {
