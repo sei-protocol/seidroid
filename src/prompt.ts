@@ -21,6 +21,8 @@ export interface ScoutFinding {
 export interface ScoutReading {
   name: string;
   note: string;
+  read: number;
+  inert: boolean;
   findings: ScoutFinding[];
 }
 
