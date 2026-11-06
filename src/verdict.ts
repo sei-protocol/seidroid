@@ -146,7 +146,7 @@ function mergeDuplicate(into: Finding, dup: Finding): void {
   into.supersedes = [...new Set([...into.supersedes, ...dup.supersedes])];
 }
 
-const dedupeKey = (f: Finding): string => [f.file, f.side, f.line, f.detail].join("\0");
+export const dedupeKey = (f: Finding): string => [f.file, f.side, f.line, f.detail].join("\0");
 
 /** reportedBySeverity counts distinct reported findings that block and that do not. */
 export function reportedBySeverity(v: Verdict, includeNits: boolean): { blocking: number; other: number } {
