@@ -115,7 +115,7 @@ export function reviewBody(v: Verdict, includeNits: boolean, unplaced: readonly 
   const placed = new Set(placeable.map(dedupeKey));
   const missed = new Set(unplaced.map(dedupeKey));
   const shown = (f: Finding) => f.detail !== "" && (includeNits || f.severity !== "nit");
-  const off = [...reportedFindings(v).filter((f) => shown(f) && !placed.has(dedupeKey(f))), ...unplaced];
+  const off = [...reportedFindings(v).filter((f) => !placed.has(dedupeKey(f))), ...unplaced].filter(shown);
   const inlineBlockers = placeable.filter((f) => f.severity === "blocker" && !missed.has(dedupeKey(f))).length;
   return [
     inline(v.submission.summary, MAX_PROSE),
