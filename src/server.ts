@@ -77,12 +77,15 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return (await gh.rest<{ state: string }>("GET", `/orgs/${org}/teams/${slug}/memberships/${encodeURIComponent(login)}`)).data?.state === "active";
   };
 
+  /** admits says whether login may ask for a review: an allowed bot or an active member of the team. */
+  const admits = async (gh: GitHub, login: string): Promise<boolean> => cfg.bots.includes(login) || (await member(gh, login));
+
   /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
     if (claims.event_name === "pull_request") {
       if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`);
-    } else if (!cfg.bots.includes(claims.actor) && !(await member(gh, claims.actor))) {
+    } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
     }
   };
@@ -95,13 +98,13 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const body = await json(req);
       const pr = positive(body.pr, "pr");
       const author = (await must(gh.rest<{ user: { login: string } }>("GET", `/repos/${owner}/${repo}/pulls/${pr}`), "read the pull request")).user.login;
-      const actor = await member(gh, claims.actor);
+      const actor = await admits(gh, claims.actor);
       if (actor && body.comment !== undefined) {
         const path = `/repos/${owner}/${repo}/issues/comments/${positive(body.comment, "comment")}`;
         const comment = await must(gh.rest<{ user: { login: string } }>("GET", path), "read the comment");
         if (comment.user.login === claims.actor) await gh.rest("POST", `${path}/reactions`, { content: "eyes" });
       }
-      return { actor, author: await member(gh, author) };
+      return { actor, author: await admits(gh, author) };
     },
 
     "POST /publish": async (req) => {

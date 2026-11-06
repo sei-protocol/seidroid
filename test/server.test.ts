@@ -114,17 +114,20 @@ test("allow reports team membership of the actor and the author", async () => {
     "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
     [`GET ${repo}/issues/comments/5`]: ok({ user: { login: "alice" } }),
     [`GET ${repo}/issues/comments/6`]: ok({ user: { login: "bob" } }),
+    [`GET ${repo}/issues/comments/8`]: ok({ user: { login: "dependabot[bot]" } }),
     [`POST ${repo}/issues/comments/5/reactions`]: () => (reacted.push("alice"), { status: 201, data: {} }),
     [`POST ${repo}/issues/comments/6/reactions`]: () => (reacted.push("bob"), { status: 201, data: {} }),
+    [`POST ${repo}/issues/comments/8/reactions`]: () => (reacted.push("dependabot[bot]"), { status: 201, data: {} }),
   });
   try {
     const r = await s.call("/allow", { pr: 7, comment: 5 });
     assert.deepEqual(r.body, { actor: true, author: false });
     await s.call("/allow", { pr: 7, comment: 6 });
     assert.deepEqual((await s.call("/allow", { pr: 7, comment: 5 }, claims({ actor: "mallory" }))).body, { actor: false, author: false });
-    assert.deepEqual(reacted, ["alice"]);
+    assert.deepEqual((await s.call("/allow", { pr: 7, comment: 8 }, claims({ actor: "dependabot[bot]" }))).body, { actor: true, author: false });
+    assert.deepEqual(reacted, ["alice", "dependabot[bot]"]);
     const m = await (await fetch(`${s.url}/metrics`)).text();
-    assert.match(m, /seidroid_requests_total\{route="POST \/allow",code="200"\} 3/);
+    assert.match(m, /seidroid_requests_total\{route="POST \/allow",code="200"\} 4/);
   } finally {
     s.close();
   }
