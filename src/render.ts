@@ -161,14 +161,14 @@ export interface CheckOutput {
 }
 
 /** checkOutput is the check run a verdict concludes. */
-export function checkOutput(v: Verdict, includeNits: boolean): CheckOutput {
+export function checkOutput(v: Verdict, includeNits: boolean, unplaced: readonly Finding[] = []): CheckOutput {
   const { blocking, other } = reportedBySeverity(v, includeNits);
   const findings = blocking + other + blockers(v).length + nonBlockers(v).length;
   const pre = preExisting(v).length;
   return {
     conclusion: standing(v).conclusion,
     title: plural(findings, "finding") + (pre ? `, ${pre} pre-existing` : ""),
-    summary: fit(reviewBody(v, includeNits)),
+    summary: fit(reviewBody(v, includeNits, unplaced)),
   };
 }
 
