@@ -1,0 +1,211 @@
+# seidroid review: the next generation of seidroid's pull request review.
+#
+# A caller runs it on its pull request and comment events:
+#
+#   on:
+#     pull_request:
+#       types: [opened, reopened, ready_for_review, synchronize]
+#     issue_comment:
+#       types: [created]
+#     pull_request_review_comment:
+#       types: [created]
+#     pull_request_review:
+#       types: [submitted]
+#   jobs:
+#     seidroid:
+#       uses: sei-protocol/seidroid/.github/workflows/review.yml@<sha>
+#       permissions:
+#         contents: read
+#         pull-requests: read
+#         id-token: write
+#       secrets:
+#         openai-api-key: ${{ secrets.PLATFORM_CODE_AGENT_OPENAI_API_KEY }}
+#
+# The jobs hold read access only. The seidroid service publishes as the App, on
+# the strength of the job's GitHub OIDC token, so no repository holds its key.
+name: seidroid review
+
+on:
+  workflow_call:
+    inputs:
+      service-url:
+        description: The seidroid service that admits requests and publishes.
+        type: string
+        default: https://seidroid.dev.platform.sei.io
+      shadow:
+        description: Publish only the check run, leaving the conversation to another reviewer.
+        type: boolean
+        default: true
+      trigger-phrase:
+        description: The mention that, followed by "review" on its own line, asks for a review.
+        type: string
+        default: '@seidroid'
+      allowed-bots:
+        description: Bot logins, comma separated, that may ask for a review. The service must allow them too.
+        type: string
+        default: ''
+      skip-review-label:
+        type: string
+        default: 'ai: skip-review'
+      nitpick-label:
+        description: The label that puts nits on the conversation as well.
+        type: string
+        default: 'ai: nitpick'
+      re-review-on-push:
+        description: Review every push, not only the first and those that may lift a change request.
+        type: boolean
+        default: false
+      review-model:
+        type: string
+        default: anthropic/claude-opus-5-5
+      scout-models:
+        description: Models, comma separated, that read the diff before the review. Empty runs none.
+        type: string
+        default: openai/gpt-6.1-sol
+      thinking:
+        type: string
+        default: high
+      extra-instructions:
+        type: string
+        default: ''
+      timeout-minutes:
+        type: number
+        default: 60
+      runs-on:
+        type: string
+        default: ubuntu-latest
+    secrets:
+      openai-api-key:
+        description: Needed by OpenAI scouts.
+        required: false
+
+permissions: {}
+
+jobs:
+  guard:
+    if: >-
+      github.event_name == 'pull_request' ||
+      contains(github.event.comment.body || github.event.review.body, inputs.trigger-phrase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    outputs:
+      run: ${{ steps.guard.outputs.run }}
+      pr: ${{ steps.guard.outputs.pr }}
+      head: ${{ steps.guard.outputs.head }}
+      repo: ${{ steps.self.outputs.repo }}
+      sha: ${{ steps.self.outputs.sha }}
+    steps:
+      - name: Find this workflow's commit
+        id: self
+        run: |
+          token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=seidroid" | jq -r .value)
+          # shellcheck disable=SC2016 # the single quotes hold JavaScript, not shell
+          node -e '
+            const c = JSON.parse(Buffer.from(process.argv[1].split(".")[1], "base64url"));
+            console.log(`repo=${c.job_workflow_ref.split("/").slice(0, 2).join("/")}\nsha=${c.job_workflow_sha}`);
+          ' "$token" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.self.outputs.repo }}
+          ref: ${{ steps.self.outputs.sha }}
+          path: .seidroid
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: .seidroid/package-lock.json
+      - run: npm ci --ignore-scripts --omit=dev
+        working-directory: .seidroid
+      - name: Decide
+        id: guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SERVICE: ${{ inputs.service-url }}
+          PHRASE: ${{ inputs.trigger-phrase }}
+          BOTS: ${{ inputs.allowed-bots }}
+          SKIP: ${{ inputs.skip-review-label }}
+          RE_REVIEW: ${{ inputs.re-review-on-push }}
+        run: >-
+          node .seidroid/src/job.ts guard --service "$SERVICE" --trigger-phrase "$PHRASE"
+          --allowed-bots "$BOTS" --skip-review-label "$SKIP" --re-review-on-push "$RE_REVIEW"
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: seidroid-review-${{ github.repository }}-${{ needs.guard.outputs.pr }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.guard.outputs.repo }}
+          ref: ${{ needs.guard.outputs.sha }}
+          path: .seidroid
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: .seidroid/package-lock.json
+      - run: npm ci --ignore-scripts --omit=dev
+        working-directory: .seidroid
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.guard.outputs.head }}
+          path: review/tree
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Restore the conversation
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/seidroid-session
+          key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: seidroid-session-${{ needs.guard.outputs.pr }}-
+      - name: Review
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.openai-api-key }}
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_FDRL_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.SEI_LABS_ANTHROPIC_ORG_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_SVAC_ID }}
+          ANTHROPIC_IDENTITY_TOKEN_FILE: ${{ runner.temp }}/anthropic-identity-token
+          SERVICE: ${{ inputs.service-url }}
+          PR: ${{ needs.guard.outputs.pr }}
+          HEAD: ${{ needs.guard.outputs.head }}
+          SHADOW: ${{ inputs.shadow }}
+          REVIEW_MODEL: ${{ inputs.review-model }}
+          SCOUT_MODELS: ${{ inputs.scout-models }}
+          THINKING: ${{ inputs.thinking }}
+          NITPICK: ${{ inputs.nitpick-label }}
+          EXTRA: ${{ inputs.extra-instructions }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+        run: >-
+          node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
+          --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
+          --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
+          --nitpick-label "$NITPICK" --extra-instructions "$EXTRA"
+          --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"
+      - name: Keep the conversation
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/seidroid-session
+          key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Keep the run records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seidroid-runs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/seidroid-out/**/run.json
+          if-no-files-found: ignore
