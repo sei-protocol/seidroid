@@ -140,6 +140,10 @@ test("publish reports no verdict, replacing its earlier notice, and refuses a re
   assert.equal(of("DELETE /repos/o/r/issues/comments/5").length, 1);
   assert.equal(of("DELETE /repos/o/r/issues/comments/6").length, 0);
   assert.equal(of("POST /repos/o/r/check-runs")[0].output.title, "No verdict");
+
+  const settled = fake({ "POST /repos/o/r/issues/7/comments": () => ({ status: 201, data: {} }) });
+  await publish(settled.gh, T, { verdict: { ...verdict({}), settledBy: "ghp_" + "b".repeat(36) } });
+  assert.equal(settled.of("POST /repos/o/r/pulls/7/reviews").length, 0);
 });
 
 test("publish in shadow mode posts only the check run", async () => {
