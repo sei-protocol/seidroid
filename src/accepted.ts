@@ -62,14 +62,21 @@ export function acceptanceFor(body: string, accepted: readonly string[]): string
   for (const entry of accepted) {
     const phrase = matchable(acceptancePhrase(entry));
     if (phrase === "") continue;
-    const at = haystack.indexOf(phrase);
-    if (at < 0) continue;
-    const before = haystack.slice(0, at);
-    const after = haystack.slice(at + phrase.length);
-    if (!negated(before) && !CONJUNCTIONS.some((c) => (" " + after).includes(c))) return entry;
+    for (let at = haystack.indexOf(phrase); at >= 0; at = haystack.indexOf(phrase, at + 1)) {
+      if (!wordAt(haystack, at, at + phrase.length)) continue;
+      const before = haystack.slice(0, at);
+      const after = haystack.slice(at + phrase.length);
+      if (!negated(before) && !CONJUNCTIONS.some((c) => (" " + after).includes(c))) return entry;
+    }
   }
   return "";
 }
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/** wordAt reports whether s[start, end) begins and ends on a word boundary. */
+const wordAt = (s: string, start: number, end: number): boolean =>
+  !WORD_CHAR.test(s[start - 1] ?? "") && !WORD_CHAR.test(s[end] ?? "");
 
 const negated = (before: string): boolean =>
   words(before)

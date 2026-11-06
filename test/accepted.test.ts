@@ -44,6 +44,9 @@ test("acceptanceFor folds form and stays narrow", () => {
     ["pins uci to the feature branch and leaks the token", false],
     ["pins uci to the feature branch; the token is logged", false],
     ["pins uci to the feature branch, which has no tag", true],
+    ["unpins uci to the feature branch", false],
+    ["pins uci to the feature branches", false],
+    ["unpins uci to the feature branch, then pins uci to the feature branch", true],
   ];
   for (const [body, want] of cases) {
     assert.equal(acceptanceFor(body, accepted) !== "", want, body);
