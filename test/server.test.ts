@@ -11,7 +11,7 @@ const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid
 const HEAD = "b".repeat(40);
 const claims = (over: Partial<Claims> = {}): Claims => ({
   repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol", job_workflow_ref: `${cfg.workflow}@${"a".repeat(40)}`, job_workflow_sha: "a".repeat(40),
-  actor: "alice", event_name: "pull_request", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
+  actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
 });
 
 async function serve(routes: Record<string, () => Response>) {
@@ -42,7 +42,7 @@ const ok = (data: object) => () => ({ status: 200, data });
 const repo = "/repos/sei-protocol/sei-chain";
 const base: Record<string, () => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
-  [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD }, base: { sha: "c".repeat(40) }, user: { login: "bob" } }),
+  [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
   [`GET ${repo}/contents/REVIEW.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- the legacy store keeps its lock\n").toString("base64") }),
 };
 const submission = { read: 1, decision: "approve", summary: "Fine." };
@@ -79,6 +79,8 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       [{ pr: 7, head: "e".repeat(40) }, claims(), 409, /is not on pull request/],
       [{ pr: -1, head: HEAD }, claims(), 400, /pr must be/],
       [{ pr: 7, head: "main" }, claims(), 400, /head must be/],
+      [{ pr: 7, head: HEAD }, claims({ ref: "refs/pull/8/merge" }), 403, /not pull request 7/],
+      [{ pr: 7, head: HEAD }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "mallory" }), 403, /not an active member/],
     ];
     for (const [body, c, status, err] of cases) {
       const r = await s.call("/publish", body, c);
@@ -91,13 +93,35 @@ test("publish refuses tokens and requests it cannot trust", async () => {
   }
 });
 
-test("allow reports team membership of the actor and the author", async () => {
-  const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }) });
+test("publish refuses a pull request from a fork", async () => {
+  const s = await serve({ ...base, [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 2 } }, base: { sha: "c".repeat(40), repo: { id: 1 } } }) });
   try {
-    const r = await s.call("/allow", { pr: 7 });
+    const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
+    assert.equal(r.status, 403);
+    assert.match(r.body.error, /fork/);
+  } finally {
+    s.close();
+  }
+});
+
+test("allow reports team membership of the actor and the author", async () => {
+  const reacted: string[] = [];
+  const s = await serve({
+    ...base,
+    "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+    [`GET ${repo}/issues/comments/5`]: ok({ user: { login: "alice" } }),
+    [`GET ${repo}/issues/comments/6`]: ok({ user: { login: "bob" } }),
+    [`POST ${repo}/issues/comments/5/reactions`]: () => (reacted.push("alice"), { status: 201, data: {} }),
+    [`POST ${repo}/issues/comments/6/reactions`]: () => (reacted.push("bob"), { status: 201, data: {} }),
+  });
+  try {
+    const r = await s.call("/allow", { pr: 7, comment: 5 });
     assert.deepEqual(r.body, { actor: true, author: false });
+    await s.call("/allow", { pr: 7, comment: 6 });
+    assert.deepEqual((await s.call("/allow", { pr: 7, comment: 5 }, claims({ actor: "mallory" }))).body, { actor: false, author: false });
+    assert.deepEqual(reacted, ["alice"]);
     const m = await (await fetch(`${s.url}/metrics`)).text();
-    assert.match(m, /seidroid_requests_total\{route="POST \/allow",code="200"\} 1/);
+    assert.match(m, /seidroid_requests_total\{route="POST \/allow",code="200"\} 3/);
   } finally {
     s.close();
   }
