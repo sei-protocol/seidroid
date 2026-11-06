@@ -76,8 +76,9 @@ const handle = (t: PriorThread): string => (wellFormedThreadId(t.id) ? ` [thread
 const replyLines = (t: PriorThread): string[] =>
   t.replies.slice(-MAX_PRIOR_REPLIES).map((r) => `      reply: ${clip(oneLine(r), MAX_DETAIL)}`);
 
-function droppedLine(dropped: number): string[] {
-  return dropped === 0 ? [] : ["", prose("dropped", { count: dropped })];
+/** listing is the entries shown, then a note on how many did not fit. */
+function listing(entries: string[], dropped: number): string {
+  return [...entries, ...(dropped === 0 ? [] : ["", prose("dropped", { count: dropped })])].join("\n");
 }
 
 function repeatedLocations(locate: Locate, threads: readonly PriorThread[]): Map<string, number> {
@@ -98,7 +99,7 @@ export function historyStep(prior: readonly PriorThread[], locate: Locate): stri
     ...replyLines(t),
   ];
   const { shown, dropped } = fitThreads(threads, entryOf);
-  const entries = [...shown.flatMap(entryOf), ...droppedLine(dropped)].join("\n");
+  const entries = listing(shown.flatMap(entryOf), dropped);
   return block("history", { count: threads.length, shown: shown.length, entries });
 }
 
@@ -113,8 +114,7 @@ export function openThreadsStep(prior: readonly PriorThread[], locate: Locate): 
     return [`  ${where}${handle(t)}${tail}`];
   };
   const { shown, dropped } = fitThreads(open, entryOf);
-  const entries = [...shown.flatMap(entryOf), ...droppedLine(dropped)].join("\n");
-  return block("open-threads", { entries });
+  return block("open-threads", { entries: listing(shown.flatMap(entryOf), dropped) });
 }
 
 /** threadUpdateStep tells a re-review which of its threads were replied to or resolved. */
@@ -129,6 +129,5 @@ export function threadUpdateStep(prior: readonly PriorThread[], locate: Locate):
     return [`  [${state(t)}] ${where}${tail}`, ...replyLines(t)];
   };
   const { shown, dropped } = fitThreads(changed, entryOf);
-  const entries = [...shown.flatMap(entryOf), ...droppedLine(dropped)].join("\n");
-  return block("thread-updates", { entries });
+  return block("thread-updates", { entries: listing(shown.flatMap(entryOf), dropped) });
 }
