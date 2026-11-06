@@ -103,6 +103,7 @@ jobs:
         id: self
         run: |
           token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=seidroid" | jq -r .value)
+          # shellcheck disable=SC2016 # the single quotes hold JavaScript, not shell
           node -e '
             const c = JSON.parse(Buffer.from(process.argv[1].split(".")[1], "base64url"));
             console.log(`repo=${c.job_workflow_ref.split("/").slice(0, 2).join("/")}\nsha=${c.job_workflow_sha}`);
@@ -182,6 +183,7 @@ jobs:
           ANTHROPIC_IDENTITY_TOKEN_FILE: ${{ runner.temp }}/anthropic-identity-token
           SERVICE: ${{ inputs.service-url }}
           PR: ${{ needs.guard.outputs.pr }}
+          HEAD: ${{ needs.guard.outputs.head }}
           SHADOW: ${{ inputs.shadow }}
           REVIEW_MODEL: ${{ inputs.review-model }}
           SCOUT_MODELS: ${{ inputs.scout-models }}
@@ -190,7 +192,7 @@ jobs:
           EXTRA: ${{ inputs.extra-instructions }}
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         run: >-
-          node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --shadow "$SHADOW"
+          node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
           --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
           --nitpick-label "$NITPICK" --extra-instructions "$EXTRA"
@@ -205,6 +207,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: seidroid-runs
+          name: seidroid-runs-${{ github.run_attempt }}
           path: ${{ runner.temp }}/seidroid-out/**/run.json
           if-no-files-found: ignore
