@@ -7,7 +7,7 @@ import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
 import { handler, type Config } from "../src/server.ts";
 
-const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", checkName: "seidroid review v2" };
+const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "seidroid review v2" };
 const HEAD = "b".repeat(40);
 const claims = (over: Partial<Claims> = {}): Claims => ({
   repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol", job_workflow_ref: `${cfg.workflow}@${"a".repeat(40)}`, job_workflow_sha: "a".repeat(40),
@@ -60,6 +60,9 @@ test("publish rebuilds the verdict from the base commit and publishes as the run
 
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: { decision: "lgtm" } } });
     assert.match((s.published[1]!.outcome as { failure: string }).failure, /broke the contract/);
+
+    const asked = claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "dependabot[bot]" });
+    assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, asked)).status, 200);
   } finally {
     s.close();
   }
