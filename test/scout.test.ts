@@ -11,7 +11,7 @@ test("readingOf turns a missing or unread submission into a note", () => {
 });
 
 test("settleByScouts approves only when every scout read an inert, clean diff", () => {
-  const settled = settleByScouts([readingOf("a", inert), readingOf("b", { ...inert, read: 9 })]);
+  const settled = settleByScouts([readingOf("a", inert), readingOf("b", { ...inert, read: 9 })], 4);
   assert.equal(settled?.decision, "approve");
   assert.equal(settled?.read, 4);
   assert.match(settled!.summary, /\(a, b\)/);
@@ -20,9 +20,10 @@ test("settleByScouts approves only when every scout read an inert, clean diff", 
     readingOf("b", { ...inert, inert: false }),
     readingOf("b", { ...inert, findings: [{ file: "a", line: 1, severity: "low", detail: "x" }] }),
   ]) {
-    assert.equal(settleByScouts([readingOf("a", inert), other]), undefined);
+    assert.equal(settleByScouts([readingOf("a", inert), other], 4), undefined);
   }
-  assert.equal(settleByScouts([]), undefined);
+  assert.equal(settleByScouts([readingOf("a", inert)], 5), undefined, "read part of the diff");
+  assert.equal(settleByScouts([], 4), undefined);
 });
 
 test("scoutPrompt points at the diff and the submit tool", () => {

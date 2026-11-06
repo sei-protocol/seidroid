@@ -90,11 +90,12 @@ export function readingOf(name: string, got: ScoutSubmission | string): ScoutRea
 }
 
 /**
- * settleByScouts approves without a review turn when every scout read the diff, found
- * nothing and called it inert; otherwise it returns undefined.
+ * settleByScouts approves without a review turn when every scout read the whole diff,
+ * found nothing and called it inert; otherwise it returns undefined.
  */
-export function settleByScouts(scouts: readonly ScoutReading[]): ReviewSubmission | undefined {
-  if (scouts.length === 0 || !scouts.every((s) => s.note === "" && s.read > 0 && s.inert && s.findings.length === 0)) {
+export function settleByScouts(scouts: readonly ScoutReading[], diffLines: number): ReviewSubmission | undefined {
+  const clean = (s: ScoutReading) => s.note === "" && s.read >= diffLines && s.inert && s.findings.length === 0;
+  if (diffLines <= 0 || scouts.length === 0 || !scouts.every(clean)) {
     return undefined;
   }
   const who = scouts.map((s) => s.name).join(", ");
