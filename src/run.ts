@@ -112,6 +112,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
     pending = records.pop() ?? "";
     for (const r of records) tally(stats, r);
   });
+  child.stdin.on("error", () => {});
   child.stdin.end(prompt);
   const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
   clearTimeout(timer);
@@ -136,7 +137,8 @@ async function main(): Promise<void> {
     },
   });
   const role = positionals[0];
-  if ((role !== "review" && role !== "scout") || !values.request || !values.out || !values.model) {
+  const timeout = Number(values.timeout);
+  if ((role !== "review" && role !== "scout") || !values.request || !values.out || !values.model || !(timeout > 0)) {
     throw new Error("usage: run.ts review|scout --request <file> --out <dir> --model <id> [--thinking <level>] [--session <dir>] [--timeout <seconds>]");
   }
   await run({
@@ -145,7 +147,7 @@ async function main(): Promise<void> {
     outDir: values.out,
     model: values.model,
     thinking: values.thinking,
-    timeoutMs: Number(values.timeout) * 1000,
+    timeoutMs: timeout * 1000,
     sessionDir: values.session,
   });
 }
