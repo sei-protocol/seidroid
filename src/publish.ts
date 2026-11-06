@@ -12,6 +12,7 @@ export interface Target {
   head: string;
   /** The App's login, e.g. seidroid[bot]. */
   bot: string;
+  /** The run attempt's URL; it tells this attempt's review from an earlier attempt's. */
   runUrl: string;
   checkName: string;
   includeNits: boolean;
@@ -103,7 +104,7 @@ async function must(res: Promise<Response> | Response, what: string): Promise<vo
 /** landedAnyway looks for a review an ambiguous failure may still have posted, so a retry never posts it twice. */
 async function landedAnyway(gh: GitHub, base: string, t: Target, failed: Response): Promise<Response> {
   const reviews = await all<{ commit_id: string; body: string; user: { login: string } }>(gh, `${base}/pulls/${t.pr}/reviews`);
-  const mine = reviews.some((r) => r.commit_id === t.head && login(r.user.login) === login(t.bot) && r.body.includes(t.runUrl));
+  const mine = reviews.some((r) => r.commit_id === t.head && login(r.user.login) === login(t.bot) && r.body.includes(`](${t.runUrl})`));
   return mine ? { status: 200, data: {} } : failed;
 }
 

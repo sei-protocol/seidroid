@@ -83,6 +83,7 @@ test("publish treats a review an ambiguous failure still posted as posted", asyn
   await publish(gh, T, { verdict: verdict({}) });
   assert.equal(of("POST /repos/o/r/pulls/7/reviews").length, 1);
   assert.equal(of("POST /repos/o/r/check-runs")[0].conclusion, "success");
+  await assert.rejects(publish(gh, { ...T, runUrl: "https://run" }, { verdict: verdict({}) }), /could not post the review: 502/);
 });
 
 test("publish anchors nothing on a file list GitHub cut short", async () => {
