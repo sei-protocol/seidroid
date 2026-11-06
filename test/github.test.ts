@@ -7,6 +7,7 @@ function serve(statuses: number[]): { calls: string[]; restore: () => void } {
   const real = globalThis.fetch;
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     calls.push(`${init.method} ${url}`);
+    assert.equal((init.headers as Record<string, string>)["Content-Type"], "application/json");
     const status = statuses.shift() ?? 200;
     return new Response(status === 200 ? JSON.stringify([1]) : "<html>bad gateway</html>", { status });
   }) as typeof fetch;
