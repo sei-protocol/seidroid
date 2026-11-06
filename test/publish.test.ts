@@ -86,6 +86,13 @@ test("publish treats a review an ambiguous failure still posted as posted", asyn
   await assert.rejects(publish(gh, { ...T, runUrl: "https://run" }, { verdict: verdict({}) }), /could not post the review: 502/);
 });
 
+test("publish never posts a finding again after a comment failed ambiguously", async () => {
+  const { gh, of } = fake({ "POST /repos/o/r/pulls/7/comments": () => ({ status: 502, data: {} }) });
+  const r = await publish(gh, T, { verdict: verdict({ inline_comments: [comment({ line: 9 })] }) });
+  assert.equal(of("POST /repos/o/r/pulls/7/comments").length, 1);
+  assert.equal(r.unplaced, 1);
+});
+
 test("publish anchors nothing on a file list GitHub cut short", async () => {
   const { gh, of } = fake({ "GET /repos/o/r/pulls/7": () => ({ status: 200, data: { changed_files: 2, head: { sha: "abc" } } }) });
   await publish(gh, T, { verdict: verdict({ inline_comments: [comment()] }) });
