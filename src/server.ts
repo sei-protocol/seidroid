@@ -16,6 +16,8 @@ export interface Config {
   trunk: string;
   /** The org/team whose members may trigger a review. */
   team: string;
+  /** Bot logins that may ask for a review without being on the team. */
+  bots: string[];
   checkName: string;
 }
 
@@ -75,12 +77,12 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return (await gh.rest<{ state: string }>("GET", `/orgs/${org}/teams/${slug}/memberships/${encodeURIComponent(login)}`)).data?.state === "active";
   };
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, and a request only from the team. */
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
     if (claims.event_name === "pull_request") {
       if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`);
-    } else if (!(await member(gh, claims.actor))) {
+    } else if (!cfg.bots.includes(claims.actor) && !(await member(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
     }
   };
@@ -202,6 +204,7 @@ if (import.meta.main) {
     workflow: env("SEIDROID_WORKFLOW", "sei-protocol/seidroid/.github/workflows/review.yml"),
     trunk: env("SEIDROID_TRUNK", "main"),
     team: env("SEIDROID_TEAM"),
+    bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
     checkName: env("SEIDROID_CHECK_NAME", "seidroid review v2"),
   };
   const audience = env("SEIDROID_AUDIENCE", "seidroid");
