@@ -122,6 +122,20 @@ test("placeableFindings drops, dedupes and gates nits", () => {
   assert.deepEqual(reportedBySeverity(v, false), { blocking: 0, other: 5 });
 });
 
+test("placeableFindings folds a repeat into the first copy", () => {
+  const v = verdict({
+    read: 40,
+    decision: "comment",
+    summary: "s",
+    inline_comments: [
+      finding({ severity: "suggestion", supersedes_thread_ids: ["PRRT_a"] }),
+      finding({ severity: "blocker", supersedes_thread_ids: ["PRRT_b"] }),
+    ],
+  });
+  const got = placeableFindings(v, false, ownThreadIds(["PRRT_a", "PRRT_b"]));
+  assert.deepEqual(got.map((f) => [f.severity, f.supersedes]), [["blocker", ["PRRT_a", "PRRT_b"]]]);
+});
+
 test("postablePath", () => {
   for (const p of ["a.go", "x/y/z.go", "dir.with.dots/f"]) assert.ok(postablePath(p), p);
   for (const p of ["", "/abs", "~/x", "-flag", "a//b", "a/./b", "../x", "a/..", "a\nb", "a\x7fb", `${"x".repeat(256)}/f`]) {

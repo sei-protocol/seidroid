@@ -122,17 +122,28 @@ export function placeableFindings(v: Verdict, includeNits: boolean, own: Readonl
 }
 
 function placeable(v: Verdict, includeNits: boolean): Finding[] {
-  const seen = new Set<string>();
-  const out: Finding[] = [];
+  const seen = new Map<string, Finding>();
   for (const f of reportedFindings(v)) {
     if (f.severity === "nit" && !includeNits) continue;
+    if (!postablePath(f.file) || f.line <= 0 || f.detail === "") continue;
     const key = dedupeKey(f);
-    if (!postablePath(f.file) || f.line <= 0 || f.detail === "" || seen.has(key)) continue;
-    seen.add(key);
-    out.push(f);
-    if (out.length >= MAX_PLACEABLE_FINDINGS) break;
+    const first = seen.get(key);
+    if (first) {
+      mergeDuplicate(first, f);
+      continue;
+    }
+    if (seen.size >= MAX_PLACEABLE_FINDINGS) continue;
+    seen.set(key, f);
   }
-  return out;
+  return [...seen.values()];
+}
+
+const SEVERITY_RANK = { nit: 0, suggestion: 1, blocker: 2 } as const;
+
+/** mergeDuplicate folds a repeat of a finding into its first copy, keeping the gravest severity and every superseded thread. */
+function mergeDuplicate(into: Finding, dup: Finding): void {
+  if (SEVERITY_RANK[dup.severity] > SEVERITY_RANK[into.severity]) into.severity = dup.severity;
+  into.supersedes = [...new Set([...into.supersedes, ...dup.supersedes])];
 }
 
 const dedupeKey = (f: Finding): string => [f.file, f.side, f.line, f.detail].join("\0");
