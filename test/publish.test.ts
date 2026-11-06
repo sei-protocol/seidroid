@@ -152,6 +152,10 @@ test("publish reports no verdict, replacing its earlier notice, and refuses a re
   const settled = fake({ "POST /repos/o/r/issues/7/comments": () => ({ status: 201, data: {} }) });
   await publish(settled.gh, T, { verdict: { ...verdict({}), settledBy: "ghp_" + "b".repeat(36) } });
   assert.equal(settled.of("POST /repos/o/r/pulls/7/reviews").length, 0);
+
+  const accepted = fake({ "POST /repos/o/r/issues/7/comments": () => ({ status: 201, data: {} }) });
+  await publish(accepted.gh, T, { verdict: { ...verdict({}), accepted: ["key ghp_" + "c".repeat(36)] } });
+  assert.equal(accepted.of("POST /repos/o/r/pulls/7/reviews").length, 0);
 });
 
 test("publish in shadow mode posts only the check run", async () => {

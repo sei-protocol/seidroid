@@ -39,7 +39,7 @@ const MAX_FILES = 3_000;
 export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals: readonly string[] = []): Promise<Report> {
   const base = `/repos/${t.owner}/${t.repo}`;
   const report: Report = { conclusion: "failure", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 };
-  const secret = "verdict" in outcome ? scanSecrets(JSON.stringify([outcome.verdict.submission, outcome.verdict.settledBy]), literals) : "";
+  const secret = "verdict" in outcome ? scanSecrets(JSON.stringify(outcome.verdict), literals) : "";
   if ("failure" in outcome || secret) {
     const nv = noVerdict("failure" in outcome ? outcome.failure : `the review names something shaped like a ${secret}, so none of it was posted`, t.runUrl);
     report.conclusion = nv.check.conclusion;
