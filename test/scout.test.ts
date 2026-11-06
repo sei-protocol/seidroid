@@ -31,4 +31,5 @@ test("scoutPrompt points at the diff and the submit tool", () => {
   assert.match(p, /o\/r#3/);
   assert.match(p, /pr\.diff in your working directory, 10 lines/);
   assert.match(p, /submit_findings/);
+  assert.match(p, /build constraint/);
 });
