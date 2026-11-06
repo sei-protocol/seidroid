@@ -9,7 +9,7 @@ const now = 1_800_000_000;
 const good = {
   iss: ISSUER, aud: "seidroid", exp: now + 300, nbf: now - 10, repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol",
   job_workflow_ref: "sei-protocol/seidroid/.github/workflows/review.yml@refs/heads/main", job_workflow_sha: "a".repeat(40),
-  actor: "alice", event_name: "pull_request", run_id: "9", run_attempt: "1", jti: "j1",
+  actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "1", jti: "j1",
 };
 
 function jwt(claims: object, header: object = { alg: "RS256", kid: "k1" }): string {

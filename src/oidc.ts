@@ -12,6 +12,7 @@ export interface Claims {
   job_workflow_sha: string;
   actor: string;
   event_name: string;
+  ref: string;
   run_id: string;
   run_attempt: string;
   jti: string;
@@ -56,7 +57,7 @@ export async function verifyToken(token: string, audience: string, keys: Keys, n
   if (c.iss !== ISSUER) throw new Error("wrong issuer");
   if (c.aud !== audience && !(Array.isArray(c.aud) && c.aud.includes(audience))) throw new Error("wrong audience");
   if (typeof c.exp !== "number" || c.exp + LEEWAY_S < now || (typeof c.nbf === "number" && c.nbf - LEEWAY_S > now)) throw new Error("expired token");
-  for (const k of ["repository", "repository_owner", "job_workflow_ref", "job_workflow_sha", "actor", "run_id", "run_attempt", "jti"] as const) {
+  for (const k of ["repository", "repository_owner", "job_workflow_ref", "job_workflow_sha", "actor", "event_name", "ref", "run_id", "run_attempt", "jti"] as const) {
     if (typeof c[k] !== "string" || c[k] === "") throw new Error(`token has no ${k}`);
   }
   return c as Claims;

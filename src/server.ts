@@ -34,6 +34,12 @@ class HttpError extends Error {
   }
 }
 
+interface Pull {
+  state: string;
+  head: { sha: string; repo: { id: number } | null };
+  base: { sha: string; repo: { id: number } };
+}
+
 const MAX_REQUEST = 1 << 20;
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -64,6 +70,21 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return { claims, gh, owner, repo };
   };
 
+  const member = async (gh: GitHub, login: string): Promise<boolean> => {
+    const [org, slug] = cfg.team.split("/");
+    return (await gh.rest<{ state: string }>("GET", `/orgs/${org}/teams/${slug}/memberships/${encodeURIComponent(login)}`)).data?.state === "active";
+  };
+
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, and a request only from the team. */
+  const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
+    if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
+    if (claims.event_name === "pull_request") {
+      if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`);
+    } else if (!(await member(gh, claims.actor))) {
+      throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
+    }
+  };
+
   const routes: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
     "GET /healthz": async () => ({ ok: true }),
 
@@ -71,14 +92,14 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const { claims, gh, owner, repo } = await authorize(req);
       const body = await json(req);
       const pr = positive(body.pr, "pr");
-      const [org, slug] = cfg.team.split("/");
-      const member = async (login: string) =>
-        (await gh.rest<{ state: string }>("GET", `/orgs/${org}/teams/${slug}/memberships/${encodeURIComponent(login)}`)).data?.state === "active";
       const author = (await must(gh.rest<{ user: { login: string } }>("GET", `/repos/${owner}/${repo}/pulls/${pr}`), "read the pull request")).user.login;
-      if (body.comment !== undefined) {
-        await gh.rest("POST", `/repos/${owner}/${repo}/issues/comments/${positive(body.comment, "comment")}/reactions`, { content: "eyes" });
+      const actor = await member(gh, claims.actor);
+      if (actor && body.comment !== undefined) {
+        const path = `/repos/${owner}/${repo}/issues/comments/${positive(body.comment, "comment")}`;
+        const comment = await must(gh.rest<{ user: { login: string } }>("GET", path), "read the comment");
+        if (comment.user.login === claims.actor) await gh.rest("POST", `${path}/reactions`, { content: "eyes" });
       }
-      return { actor: await member(claims.actor), author: await member(author) };
+      return { actor, author: await member(gh, author) };
     },
 
     "POST /publish": async (req) => {
@@ -87,8 +108,9 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const pr = positive(body.pr, "pr");
       if (typeof body.head !== "string" || !SHA.test(body.head)) throw new HttpError(400, "head must be a commit sha");
       const base = `/repos/${owner}/${repo}`;
-      const pull = await must(gh.rest<{ state: string; head: { sha: string }; base: { sha: string } }>("GET", `${base}/pulls/${pr}`), "read the pull request");
+      const pull = await must(gh.rest<Pull>("GET", `${base}/pulls/${pr}`), "read the pull request");
       if (pull.state !== "open") throw new HttpError(409, `pull request ${pr} is ${pull.state}`);
+      await admitted(gh, claims, pr, pull);
       if (pull.head.sha !== body.head) {
         const cmp = await gh.rest<{ status: string }>("GET", `${base}/compare/${body.head}...${pull.head.sha}`);
         if (cmp.data?.status !== "ahead") throw new HttpError(409, `${body.head} is not on pull request ${pr}`);
