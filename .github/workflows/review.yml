@@ -165,7 +165,6 @@ jobs:
           ref: ${{ needs.guard.outputs.head }}
           path: review/tree
           fetch-depth: 0
-          filter: blob:none
           persist-credentials: false
       - name: Restore the conversation
         uses: actions/cache/restore@v4
