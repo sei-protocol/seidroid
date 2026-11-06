@@ -117,19 +117,27 @@ async function diffFiles(gh: GitHub, base: string, t: Target): Promise<DiffFile[
   return files.length === pr.data.changed_files ? files : [];
 }
 
-/** placeAlone posts one finding on its line when it may have one, else on its file, else leaves it to the review body. */
+/**
+ * placeAlone posts one finding on its line when it may have one, else on its file, else leaves it to the review body.
+ * Only GitHub's refusal (422) moves on to the next place: any other failure may still have posted the comment.
+ */
 async function placeAlone(gh: GitHub, base: string, t: Target, f: Finding, tryLine: boolean, landed: Finding[], unplaced: Finding[], report: Report): Promise<void> {
   const path = `${base}/pulls/${t.pr}/comments`;
   const at = { commit_id: t.head, path: f.file };
-  if (tryLine && (await gh.rest("POST", path, { ...at, line: f.line, side: f.side, body: findingComment(f) })).status === 201) {
-    landed.push(f);
-    report.inline++;
-  } else if ((await gh.rest("POST", path, { ...at, subject_type: "file", body: findingComment(f, true) })).status === 201) {
-    landed.push(f);
-    report.file++;
-  } else {
-    unplaced.push(f);
+  const tries: [object, "inline" | "file"][] = [
+    ...(tryLine ? [[{ ...at, line: f.line, side: f.side, body: findingComment(f) }, "inline"] as [object, "inline"]] : []),
+    [{ ...at, subject_type: "file", body: findingComment(f, true) }, "file"],
+  ];
+  for (const [body, where] of tries) {
+    const { status } = await gh.rest("POST", path, body);
+    if (status === 201) {
+      landed.push(f);
+      report[where]++;
+      return;
+    }
+    if (status !== 422) break;
   }
+  unplaced.push(f);
 }
 
 const OWN_THREADS = `query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
