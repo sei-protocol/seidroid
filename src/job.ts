@@ -35,6 +35,8 @@ export interface Gate {
 
 export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }>;
 
+/** The audience of the OIDC tokens the job shows the seidroid service. */
+const AUDIENCE = "seidroid";
 const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 
 /** requested reports whether a comment asks for a review: a line holding just the phrase and "review". */
@@ -149,8 +151,6 @@ async function service(url: string, route: string, body: unknown): Promise<any> 
   return got;
 }
 
-const AUDIENCE = "seidroid";
-
 const git = (dir: string, ...args: string[]): string => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", maxBuffer: 1 << 30 });
 
 /** changedLines counts the added and removed lines in a diff's hunks. */
@@ -188,7 +188,9 @@ async function review(o: Record<string, string>): Promise<void> {
   const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
   const gh = client(process.env.GITHUB_TOKEN!);
   const pr = Number(o.pr);
-  const pull = (await gh.rest<any>("GET", `/repos/${owner}/${repo}/pulls/${pr}`)).data;
+  const got = await gh.rest<any>("GET", `/repos/${owner}/${repo}/pulls/${pr}`);
+  if (got.status !== 200) throw new Error(`could not read pull request ${pr}: ${got.status}`);
+  const pull = { ...got.data, head: { ...got.data.head, sha: o.head } };
   const work = path.resolve(o.work);
   const { diffLines, hasStandards } = lay(work, pull);
   process.chdir(work);
@@ -223,7 +225,7 @@ async function review(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow",
 ];
 
 async function main(): Promise<void> {
