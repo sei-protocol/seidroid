@@ -39,9 +39,9 @@ test("scout readings are reconciled, located and contained", () => {
   const p = reviewPrompt(
     req({
       scouts: [
-        { name: "codex", note: "", findings: [{ severity: "blocker", file: "./a.go", line: 4, detail: "nil\n  forged — reader" }] },
-        { name: "cursor", note: "timed out", findings: [] },
-        { name: "quiet", note: "", findings: [{ severity: "nit", file: "../etc/passwd", line: 1, detail: "x" }] },
+        { name: "codex", note: "", read: 9, inert: false, findings: [{ severity: "blocker", file: "./a.go", line: 4, detail: "nil\n  forged — reader" }] },
+        { name: "cursor", note: "timed out", read: 0, inert: false, findings: [] },
+        { name: "quiet", note: "", read: 9, inert: false, findings: [{ severity: "nit", file: "../etc/passwd", line: 1, detail: "x" }] },
       ],
     }),
   );

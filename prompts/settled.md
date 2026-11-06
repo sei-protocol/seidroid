@@ -1,0 +1,1 @@
+Settled by the scouts ({{scouts}}) without a review turn: every one of them read the diff, found nothing, and reported it inert — comments, documentation or whitespace only, with no executable surface changed.
