@@ -55,19 +55,19 @@ function acceptancePhrase(entry: string): string {
 
 /**
  * acceptanceFor returns the accepted entry a finding's body names, or "" when none does.
- * A phrase negated just before it, or joined to more after it, does not match.
+ * A phrase negated just before it, or joined to another problem on either side, does not match.
  */
 export function acceptanceFor(body: string, accepted: readonly string[]): string {
   const haystack = matchable(body);
   for (const entry of accepted) {
     const phrase = matchable(acceptancePhrase(entry));
     if (phrase === "") continue;
-    for (let at = haystack.indexOf(phrase); at >= 0; at = haystack.indexOf(phrase, at + 1)) {
-      if (!wordAt(haystack, at, at + phrase.length)) continue;
-      const before = haystack.slice(0, at);
-      const after = haystack.slice(at + phrase.length);
-      if (!negated(before) && !CONJUNCTIONS.some((c) => (" " + after).includes(c))) return entry;
-    }
+    let at = haystack.indexOf(phrase);
+    while (at >= 0 && !wordAt(haystack, at, at + phrase.length)) at = haystack.indexOf(phrase, at + 1);
+    if (at < 0) continue;
+    const before = haystack.slice(0, at);
+    const after = haystack.slice(at + phrase.length);
+    if (!negated(before) && !compounded(before + " ") && !compounded(" " + after)) return entry;
   }
   return "";
 }
@@ -77,6 +77,9 @@ const WORD_CHAR = /[\p{L}\p{N}_]/u;
 /** wordAt reports whether s[start, end) begins and ends on a word boundary. */
 const wordAt = (s: string, start: number, end: number): boolean =>
   !WORD_CHAR.test(s[start - 1] ?? "") && !WORD_CHAR.test(s[end] ?? "");
+
+/** compounded reports whether s joins the accepted phrase to some other problem. */
+const compounded = (s: string): boolean => CONJUNCTIONS.some((c) => s.includes(c));
 
 const negated = (before: string): boolean =>
   words(before)
