@@ -62,6 +62,7 @@ test("reviewBody lists a finding that landed nowhere and stops counting it inlin
   assert.doesNotMatch(body, /as inline comments/);
   const nit = { file: "a.go", line: 2, side: "RIGHT" as const, severity: "nit" as const, detail: "rename", supersedes: [] };
   assert.doesNotMatch(reviewBody(v, false, [nit]), /rename/);
+  assert.match(checkOutput(v, false, [{ ...nit, severity: "blocker", detail: "panics" }]).summary, /- `a.go:2` — panics/);
 });
 
 test("section caps its entries", () => {
