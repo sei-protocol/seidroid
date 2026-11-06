@@ -56,6 +56,7 @@ test("standing derives the decision with the conclusion", async (t) => {
     ["a pre-existing suggestion does not withhold", { read: 40, decision: "approve", summary: "s", pre_existing_issues: [{ severity: "suggestion", body: "README drifts" }] }, "approve", "success", "as-said"],
     ["approve that did not read the diff", { read: 0, decision: "approve", summary: "s" }, "comment", "neutral", "unread-diff"],
     ["comment and nothing else", { read: 40, decision: "comment", summary: "s" }, "comment", "neutral", "empty-comment"],
+    ["comment with only a blank finding", { read: 40, decision: "comment", summary: "s", inline_comments: [finding({ body: " " })] }, "comment", "neutral", "empty-comment"],
     ["comment with notes", { read: 40, decision: "comment", summary: "s", non_blockers: ["a note"] }, "comment", "success", "as-said"],
   ];
   for (const [name, raw, decision, conclusion, why] of cases) {

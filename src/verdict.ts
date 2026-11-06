@@ -211,7 +211,7 @@ export function standing(v: Verdict): Standing {
 }
 
 const wroteAnythingDown = (v: Verdict): boolean =>
-  reportedFindings(v).length > 0 || nonBlockers(v).length > 0 || preExisting(v).length > 0;
+  reportedFindings(v).some((f) => f.detail !== "") || nonBlockers(v).length > 0 || preExisting(v).length > 0;
 
 export interface ThreadPlan {
   addressed: string[];
