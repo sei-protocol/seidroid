@@ -15,8 +15,12 @@ app:
 team: ""
 # Bot logins that may request a review as well, e.g. seidroid[bot].
 bots: []
-# Further service settings, e.g. SEIDROID_OWNERS or SEIDROID_CHECK_NAME.
+# Further service settings, e.g. SEIDROID_OWNERS or SEIDROID_CHECK_NAME. The
+# chart writes these, the team and the bots to its own ConfigMap.
 env: {}
+# More ConfigMaps or Secrets to load settings from, as container envFrom
+# entries. The chart's own settings win over the same key in one of these.
+envFrom: []
 
 resources:
   requests:

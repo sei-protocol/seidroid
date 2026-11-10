@@ -8,6 +8,7 @@
     "team",
     "bots",
     "env",
+    "envFrom",
     "resources",
     "nodeSelector",
     "tolerations",
@@ -188,6 +189,49 @@
         },
         "labels": {
           "$ref": "#/definitions/strings"
+        }
+      }
+    },
+    "envFrom": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "prefix": {
+            "type": "string"
+          },
+          "configMapRef": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "$ref": "#/definitions/name"
+              },
+              "optional": {
+                "type": "boolean"
+              }
+            }
+          },
+          "secretRef": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "$ref": "#/definitions/name"
+              },
+              "optional": {
+                "type": "boolean"
+              }
+            }
+          }
         }
       }
     }

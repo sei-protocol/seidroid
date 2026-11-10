@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "seidroid.labels" . | nindent 4 }}
+data:
+  SEIDROID_TEAM: {{ .Values.team | quote }}
+  SEIDROID_BOTS: {{ join "," .Values.bots | quote }}
+  {{- range $name, $value := .Values.env }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}

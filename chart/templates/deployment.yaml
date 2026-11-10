@@ -18,6 +18,8 @@ spec:
     metadata:
       labels:
         {{- include "seidroid.labels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -47,14 +49,13 @@ spec:
                   key: {{ .Values.app.idKey }}
             - name: GITHUB_APP_PRIVATE_KEY_FILE
               value: /var/run/seidroid/private-key
-            - name: SEIDROID_TEAM
-              value: {{ .Values.team | quote }}
-            - name: SEIDROID_BOTS
-              value: {{ join "," .Values.bots | quote }}
-            {{- range $name, $value := .Values.env }}
-            - name: {{ $name }}
-              value: {{ $value | quote }}
+          # The chart's ConfigMap comes last, so its settings win over the same key in envFrom.
+          envFrom:
+            {{- with .Values.envFrom }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
+            - configMapRef:
+                name: {{ .Release.Name }}
           readinessProbe:
             httpGet:
               path: /healthz
