@@ -27,8 +27,6 @@ resources:
 
 nodeSelector: {}
 tolerations: []
-affinity: {}
-podAnnotations: {}
 
 service:
   port: 80
