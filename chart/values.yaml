@@ -1,0 +1,48 @@
+image:
+  repository: ghcr.io/sei-protocol/seidroid
+  # tag is required; digest pins it further when set.
+  tag: ""
+  digest: ""
+
+# The Secret that holds the App ID and private key. The chart never creates
+# it, so the key stays wherever the cluster keeps its secrets.
+app:
+  secretName: seidroid-app
+  idKey: app-id
+  privateKeyKey: private-key
+
+# The team whose members may request a review, as org/team-slug. Required.
+team: ""
+# Bot logins that may request a review as well, e.g. seidroid[bot].
+bots: []
+# Further service settings, e.g. SEIDROID_OWNERS or SEIDROID_CHECK_NAME.
+env: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+service:
+  port: 80
+
+# Exposes /healthz, /allow and /publish through a Gateway API HTTPRoute.
+# /metrics is never routed.
+route:
+  enabled: false
+  hostname: ""
+  annotations: {}
+  parentRefs: []
+
+# Scrapes /metrics with a Prometheus Operator PodMonitor.
+podMonitor:
+  enabled: false
+  namespace: ""
+  labels: {}

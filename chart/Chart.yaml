@@ -1,0 +1,8 @@
+apiVersion: v2
+name: seidroid
+description: The seidroid review service, which publishes reviews as the seidroid App for review runners that prove who they are with GitHub Actions OIDC.
+type: application
+version: 0.1.0
+home: https://github.com/sei-protocol/seidroid
+sources:
+  - https://github.com/sei-protocol/seidroid

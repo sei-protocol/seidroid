@@ -1,0 +1,91 @@
+# One replica on purpose: the service refuses a replayed OIDC token by its jti,
+# and it keeps those in memory. A second replica would accept a token the first
+# has already used.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "seidroid.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "seidroid.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "seidroid.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: seidroid
+          image: {{ include "seidroid.image" . }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.secretName }}
+                  key: {{ .Values.app.idKey }}
+            - name: GITHUB_APP_PRIVATE_KEY_FILE
+              value: /var/run/seidroid/private-key
+            - name: SEIDROID_TEAM
+              value: {{ required "team is required" .Values.team | quote }}
+            - name: SEIDROID_BOTS
+              value: {{ join "," .Values.bots | quote }}
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: app-key
+              mountPath: /var/run/seidroid
+              readOnly: true
+      volumes:
+        - name: app-key
+          secret:
+            secretName: {{ .Values.app.secretName }}
+            items:
+              - key: {{ .Values.app.privateKeyKey }}
+                path: private-key

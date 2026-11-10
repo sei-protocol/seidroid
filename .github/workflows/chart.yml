@@ -1,0 +1,44 @@
+name: Chart
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    name: Lint and publish the chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: helm lint chart --set image.tag=lint --set team=org/team
+      - run: >-
+          helm template seidroid chart --set image.tag=lint --set team=org/team
+          --set route.enabled=true --set route.hostname=seidroid.example.com --set 'route.parentRefs[0].name=gateway'
+          --set podMonitor.enabled=true > /dev/null
+      # A published version is never overwritten, so a chart change ships by bumping version in
+      # Chart.yaml. GHCR answers denied rather than not found for a chart it has never seen.
+      - if: github.event_name != 'pull_request'
+        env:
+          ACTOR: ${{ github.actor }}
+          TOKEN: ${{ github.token }}
+        run: |
+          echo "$TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          version=$(helm show chart chart | awk '$1 == "version:" { print $2 }')
+          if out=$(helm show chart oci://ghcr.io/sei-protocol/charts/seidroid --version "$version" 2>&1); then
+            echo "seidroid $version is already published"
+          elif grep -qE "not found|denied" <<< "$out"; then
+            helm package chart
+            helm push "seidroid-$version.tgz" oci://ghcr.io/sei-protocol/charts
+          else
+            echo "$out"
+            exit 1
+          fi
