@@ -1,26 +1,51 @@
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   repository: ghcr.io/sei-protocol/seidroid
   # tag is required; digest pins it further when set.
   tag: ""
   digest: ""
+  pullPolicy: IfNotPresent
 
-# The Secret that holds the App ID and private key. The chart never creates
-# it, so the key stays wherever the cluster keeps its secrets.
-app:
-  secretName: seidroid-app
-  idKey: app-id
+imagePullSecrets: []
+
+# The GitHub App the service publishes as. The chart never creates this Secret,
+# so the private key stays wherever the cluster keeps its secrets.
+githubApp:
+  existingSecret: seidroid-app
+  appIdKey: app-id
   privateKeyKey: private-key
 
-# The team whose members may request a review, as org/team-slug. Required.
-team: ""
-# Bot logins that may request a review as well, e.g. seidroid[bot].
-bots: []
-# Further service settings, e.g. SEIDROID_OWNERS or SEIDROID_CHECK_NAME. The
-# chart writes these, the team and the bots to its own ConfigMap.
-env: {}
+# Service settings, written to the chart's ConfigMap.
+config:
+  # The team whose members may request a review, as org/team-slug. Required.
+  team: ""
+  # Bot logins that may request a review as well, e.g. seidroid[bot].
+  bots: []
+  # Owners whose repositories the service publishes to.
+  owners:
+    - sei-protocol
+  # The reusable workflow a caller's OIDC token must come from, and the branch
+  # its commit must be on.
+  workflow: sei-protocol/seidroid/.github/workflows/review.yml
+  trunk: main
+  checkName: seidroid review v2
+  # The audience a caller's OIDC token must be issued for.
+  audience: seidroid
+
 # More ConfigMaps or Secrets to load settings from, as container envFrom
 # entries. The chart's own settings win over the same key in one of these.
 envFrom: []
+
+serviceAccount:
+  create: true
+  # Defaults to the full name when empty.
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
 
 resources:
   requests:
@@ -31,20 +56,23 @@ resources:
 
 nodeSelector: {}
 tolerations: []
+affinity: {}
 
 service:
   port: 80
 
-# Exposes /healthz, /allow and /publish through a Gateway API HTTPRoute.
-# /metrics is never routed.
-route:
+# Routes /healthz, /allow and /publish through the Gateway API. /metrics is
+# never routed.
+httpRoute:
   enabled: false
-  hostname: ""
   annotations: {}
   parentRefs: []
+  hostnames: []
 
 # Scrapes /metrics with a Prometheus Operator PodMonitor.
 podMonitor:
   enabled: false
+  # Defaults to the release namespace when empty.
   namespace: ""
   labels: {}
+  interval: ""

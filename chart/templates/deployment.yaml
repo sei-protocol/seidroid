@@ -1,14 +1,16 @@
 # One replica on purpose: the service refuses a replayed OIDC token by its jti,
 # and it keeps those in memory. A second replica would accept a token the first
-# has already used.
+# has already used. The security contexts are fixed rather than values, so a
+# deployment cannot loosen them.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "seidroid.fullname" . }}
   labels:
     {{- include "seidroid.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -18,13 +20,27 @@ spec:
     metadata:
       labels:
         {{- include "seidroid.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
+      serviceAccountName: {{ include "seidroid.serviceAccountName" . }}
       automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       {{- with .Values.nodeSelector }}
@@ -35,9 +51,14 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: seidroid
           image: {{ include "seidroid.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: 8080
@@ -45,17 +66,19 @@ spec:
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.app.secretName }}
-                  key: {{ .Values.app.idKey }}
+                  name: {{ .Values.githubApp.existingSecret }}
+                  key: {{ .Values.githubApp.appIdKey }}
             - name: GITHUB_APP_PRIVATE_KEY_FILE
               value: /var/run/seidroid/private-key
+            - name: PORT
+              value: "8080"
           # The chart's ConfigMap comes last, so its settings win over the same key in envFrom.
           envFrom:
             {{- with .Values.envFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
             - configMapRef:
-                name: {{ .Release.Name }}
+                name: {{ include "seidroid.fullname" . }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -67,18 +90,20 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
+            privileged: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: app-key
+            - name: github-app
               mountPath: /var/run/seidroid
               readOnly: true
       volumes:
-        - name: app-key
+        - name: github-app
           secret:
-            secretName: {{ .Values.app.secretName }}
+            secretName: {{ .Values.githubApp.existingSecret }}
+            defaultMode: 0440
             items:
-              - key: {{ .Values.app.privateKeyKey }}
+              - key: {{ .Values.githubApp.privateKeyKey }}
                 path: private-key

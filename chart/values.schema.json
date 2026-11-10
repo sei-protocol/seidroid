@@ -1,21 +1,5 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "image",
-    "app",
-    "team",
-    "bots",
-    "env",
-    "envFrom",
-    "resources",
-    "nodeSelector",
-    "tolerations",
-    "service",
-    "route",
-    "podMonitor"
-  ],
   "definitions": {
     "name": {
       "type": "string",
@@ -26,16 +10,64 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "login": {
+      "type": "string",
+      "pattern": "^[^,\\s]+$"
     }
   },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "nameOverride",
+    "fullnameOverride",
+    "image",
+    "imagePullSecrets",
+    "githubApp",
+    "config",
+    "envFrom",
+    "serviceAccount",
+    "podAnnotations",
+    "podLabels",
+    "resources",
+    "nodeSelector",
+    "tolerations",
+    "affinity",
+    "service",
+    "httpRoute",
+    "podMonitor"
+  ],
   "properties": {
+    "nameOverride": {
+      "anyOf": [
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        }
+      ]
+    },
+    "fullnameOverride": {
+      "anyOf": [
+        {
+          "const": ""
+        },
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+        }
+      ]
+    },
     "image": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "repository",
         "tag",
-        "digest"
+        "digest",
+        "pullPolicy"
       ],
       "properties": {
         "repository": {
@@ -48,22 +80,44 @@
         "digest": {
           "type": "string",
           "pattern": "^(sha256:[a-f0-9]{64})?$"
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
         }
       }
     },
-    "app": {
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/definitions/name"
+          }
+        }
+      }
+    },
+    "githubApp": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "secretName",
-        "idKey",
+        "existingSecret",
+        "appIdKey",
         "privateKeyKey"
       ],
       "properties": {
-        "secretName": {
+        "existingSecret": {
           "$ref": "#/definitions/name"
         },
-        "idKey": {
+        "appIdKey": {
           "$ref": "#/definitions/name"
         },
         "privateKeyKey": {
@@ -71,124 +125,48 @@
         }
       }
     },
-    "team": {
-      "type": "string",
-      "pattern": "^[^/\\s]+/[^/\\s]+$"
-    },
-    "bots": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "pattern": "^[^,\\s]+$"
-      }
-    },
-    "env": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      },
-      "propertyNames": {
-        "pattern": "^[A-Z_][A-Z0-9_]*$",
-        "not": {
-          "enum": [
-            "GITHUB_APP_ID",
-            "GITHUB_APP_PRIVATE_KEY_FILE",
-            "SEIDROID_TEAM",
-            "SEIDROID_BOTS"
-          ]
-        }
-      }
-    },
-    "resources": {
-      "type": "object"
-    },
-    "nodeSelector": {
-      "$ref": "#/definitions/strings"
-    },
-    "tolerations": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      }
-    },
-    "service": {
+    "config": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "port"
+        "team",
+        "bots",
+        "owners",
+        "workflow",
+        "trunk",
+        "checkName",
+        "audience"
       ],
       "properties": {
-        "port": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535
-        }
-      }
-    },
-    "route": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "enabled",
-        "hostname",
-        "annotations",
-        "parentRefs"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
+        "team": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
         },
-        "hostname": {
-          "type": "string"
-        },
-        "annotations": {
-          "$ref": "#/definitions/strings"
-        },
-        "parentRefs": {
+        "bots": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": [
-              "name"
-            ]
+            "$ref": "#/definitions/login"
           }
-        }
-      },
-      "if": {
-        "properties": {
-          "enabled": {
-            "const": true
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "hostname": {
-            "minLength": 1
-          },
-          "parentRefs": {
-            "minItems": 1
-          }
-        }
-      }
-    },
-    "podMonitor": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "enabled",
-        "namespace",
-        "labels"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
         },
-        "namespace": {
-          "type": "string"
+        "owners": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/login"
+          }
         },
-        "labels": {
-          "$ref": "#/definitions/strings"
+        "workflow": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+/\\.github/workflows/[^/\\s]+\\.ya?ml$"
+        },
+        "trunk": {
+          "$ref": "#/definitions/name"
+        },
+        "checkName": {
+          "$ref": "#/definitions/name"
+        },
+        "audience": {
+          "$ref": "#/definitions/name"
         }
       }
     },
@@ -232,6 +210,154 @@
               }
             }
           }
+        }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "create",
+        "name",
+        "annotations"
+      ],
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+            }
+          ]
+        },
+        "annotations": {
+          "$ref": "#/definitions/strings"
+        }
+      }
+    },
+    "podAnnotations": {
+      "$ref": "#/definitions/strings"
+    },
+    "podLabels": {
+      "$ref": "#/definitions/strings"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "$ref": "#/definitions/strings"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "annotations",
+        "parentRefs",
+        "hostnames"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "$ref": "#/definitions/strings"
+        },
+        "parentRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "hostnames": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*\\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parentRefs": {
+            "minItems": 1
+          },
+          "hostnames": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "podMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "namespace",
+        "labels",
+        "interval"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
+            }
+          ]
+        },
+        "labels": {
+          "$ref": "#/definitions/strings"
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^([0-9]+(ms|s|m|h))*$"
         }
       }
     }

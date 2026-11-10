@@ -2,7 +2,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "seidroid.fullname" . }}
   namespace: {{ .Values.podMonitor.namespace | default .Release.Namespace }}
   labels:
     {{- include "seidroid.labels" . | nindent 4 }}
@@ -19,4 +19,7 @@ spec:
   podMetricsEndpoints:
     - port: http
       path: /metrics
+      {{- with .Values.podMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
 {{- end }}
