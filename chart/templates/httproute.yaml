@@ -11,9 +11,9 @@ metadata:
   {{- end }}
 spec:
   parentRefs:
-    {{- required "route.parentRefs is required" .Values.route.parentRefs | toYaml | nindent 4 }}
+    {{- toYaml .Values.route.parentRefs | nindent 4 }}
   hostnames:
-    - {{ required "route.hostname is required" .Values.route.hostname | quote }}
+    - {{ .Values.route.hostname | quote }}
   rules:
     - matches:
         {{- range list "/healthz" "/allow" "/publish" }}

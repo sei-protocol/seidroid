@@ -1,0 +1,195 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "app",
+    "team",
+    "bots",
+    "env",
+    "resources",
+    "nodeSelector",
+    "tolerations",
+    "service",
+    "route",
+    "podMonitor"
+  ],
+  "definitions": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "strings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "tag",
+        "digest"
+      ],
+      "properties": {
+        "repository": {
+          "$ref": "#/definitions/name"
+        },
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[a-f0-9]{64})?$"
+        }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretName",
+        "idKey",
+        "privateKeyKey"
+      ],
+      "properties": {
+        "secretName": {
+          "$ref": "#/definitions/name"
+        },
+        "idKey": {
+          "$ref": "#/definitions/name"
+        },
+        "privateKeyKey": {
+          "$ref": "#/definitions/name"
+        }
+      }
+    },
+    "team": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$"
+    },
+    "bots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[^,\\s]+$"
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Z_][A-Z0-9_]*$",
+        "not": {
+          "enum": [
+            "GITHUB_APP_ID",
+            "GITHUB_APP_PRIVATE_KEY_FILE",
+            "SEIDROID_TEAM",
+            "SEIDROID_BOTS"
+          ]
+        }
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "$ref": "#/definitions/strings"
+    },
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "hostname",
+        "annotations",
+        "parentRefs"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/strings"
+        },
+        "parentRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ]
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "hostname": {
+            "minLength": 1
+          },
+          "parentRefs": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "podMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "namespace",
+        "labels"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "labels": {
+          "$ref": "#/definitions/strings"
+        }
+      }
+    }
+  }
+}
