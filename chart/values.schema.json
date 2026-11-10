@@ -35,7 +35,7 @@
     "affinity",
     "service",
     "httpRoute",
-    "podMonitor"
+    "serviceMonitor"
   ],
   "properties": {
     "nameOverride": {
@@ -328,29 +328,17 @@
         }
       }
     },
-    "podMonitor": {
+    "serviceMonitor": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "enabled",
-        "namespace",
         "labels",
         "interval"
       ],
       "properties": {
         "enabled": {
           "type": "boolean"
-        },
-        "namespace": {
-          "anyOf": [
-            {
-              "const": ""
-            },
-            {
-              "type": "string",
-              "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
-            }
-          ]
         },
         "labels": {
           "$ref": "#/definitions/strings"

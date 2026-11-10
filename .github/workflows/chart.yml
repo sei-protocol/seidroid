@@ -23,7 +23,7 @@ jobs:
       - run: >-
           helm template seidroid chart --set image.tag=lint --set config.team=org/team
           --set httpRoute.enabled=true --set 'httpRoute.hostnames[0]=seidroid.example.com' --set 'httpRoute.parentRefs[0].name=gateway'
-          --set podMonitor.enabled=true > /dev/null
+          --set serviceMonitor.enabled=true > /dev/null
       # A published version is never overwritten, so a chart change ships by bumping version in
       # Chart.yaml. GHCR answers denied rather than not found for a chart it has never seen.
       - if: github.event_name != 'pull_request'

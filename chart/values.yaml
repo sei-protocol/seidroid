@@ -69,10 +69,8 @@ httpRoute:
   parentRefs: []
   hostnames: []
 
-# Scrapes /metrics with a Prometheus Operator PodMonitor.
-podMonitor:
+# Scrapes /metrics through the Service with a Prometheus Operator ServiceMonitor.
+serviceMonitor:
   enabled: false
-  # Defaults to the release namespace when empty.
-  namespace: ""
   labels: {}
   interval: ""
