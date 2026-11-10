@@ -2,7 +2,10 @@ apiVersion: v2
 name: seidroid
 description: The seidroid review service, which publishes reviews as the seidroid App for review runners that prove who they are with GitHub Actions OIDC.
 type: application
-version: 0.1.0
+# The release workflow sets version and appVersion when it publishes: X.Y.Z from
+# a vX.Y.Z tag, or a 0.0.0-snapshot.<time> snapshot of main with its sha image.
+version: 0.0.0
+appVersion: snapshot
 home: https://github.com/sei-protocol/seidroid
 sources:
   - https://github.com/sei-protocol/seidroid

@@ -3,7 +3,8 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/sei-protocol/seidroid
-  # tag is required; digest pins it further when set.
+  # Defaults to the chart's appVersion, which is the image it was published
+  # with, pinned by digest. digest pins any other tag.
   tag: ""
   digest: ""
   pullPolicy: IfNotPresent

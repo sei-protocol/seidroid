@@ -15,7 +15,7 @@ It is in development, and runs beside the current review in
 | `src/verdict.ts` | The review contract: the `submit_review` schema, and how a submission becomes the recorded decision, check conclusion, placeable findings and thread plan. |
 | `src/accepted.ts` | The base branch's accepted pre-existing conditions, read from its guidelines. |
 | `test/` | Tests, ported from the current review driver's. |
-| `chart/` | The Helm chart for the service, published to `oci://ghcr.io/sei-protocol/charts` from `main`. |
+| `chart/` | The Helm chart for the service, published to `oci://ghcr.io/sei-protocol/charts` with the image. |
 
 ## Development
 
