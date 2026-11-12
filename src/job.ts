@@ -108,7 +108,7 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   if (p.head.repo?.id !== p.base.repo.id) return deny(pr, "the pull request comes from a fork");
   if (question) return { run: false, reply: true, reason: `${ev.actor} asked seidroid`, pr, head: p.head.sha, comment: asked.id };
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
-  if (asked) return admit(`${ev.actor} asked for a review`);
+  if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id };
   if (p.draft) return deny(pr, "the pull request is a draft");
   const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
   const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
@@ -304,16 +304,27 @@ async function reply(o: Record<string, string>): Promise<void> {
   console.log((await service(o.service, "/reply", { pr, comment, body })).url);
 }
 
+/** react sets the App's reaction on the comment that started the run from the job's state, and only warns when it cannot. */
+async function react(o: Record<string, string>): Promise<void> {
+  const state = ({ success: "done", failure: "failed" } as Record<string, string>)[o.state] ?? o.state;
+  try {
+    await service(o.service, "/react", { pr: Number(o.pr), comment: Number(o.comment), state });
+  } catch (e) {
+    console.log(`::warning::could not react to comment ${o.comment}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "state",
 ];
 
 async function main(): Promise<void> {
   const { positionals, values: o } = parseArgs({ allowPositionals: true, options: Object.fromEntries(OPTIONS.map((k) => [k, { type: "string" as const, default: "" }])) });
   if (positionals[0] === "review") return review(o);
   if (positionals[0] === "reply") return reply(o);
-  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply [--option value ...]");
+  if (positionals[0] === "react") return react(o);
+  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply|react [--option value ...]");
   const ev: Event = { name: process.env.GITHUB_EVENT_NAME!, actor: process.env.GITHUB_ACTOR!, payload: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8")) };
   const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]), shadow: o.shadow !== "false" };
   const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }));

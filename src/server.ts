@@ -74,6 +74,10 @@ const ASKED: Record<string, { read: (base: string, pr: number, id: number) => st
   },
 };
 
+/** REACTION is the App's reaction on the comment that started a run, by the run's state, as v1 leaves it. */
+const REACTION: Record<string, string | null> = { working: "eyes", done: "+1", failed: "-1", cancelled: null };
+const REACTED_AT: Record<string, string> = { issue_comment: "issues", pull_request_review_comment: "pulls" };
+
 const MAX_REQUEST = 1 << 20;
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -167,6 +171,30 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         return landed ? { status: 201, data: landed } : post();
       };
       return { url: (await must(answer(), "post the reply")).html_url };
+    },
+
+    "POST /react": async (req) => {
+      const { claims, gh, owner, repo } = await authorize(req);
+      const body = await json(req);
+      const pr = positive(body.pr, "pr");
+      const id = positive(body.comment, "comment");
+      if (typeof body.state !== "string" || !Object.hasOwn(REACTION, body.state)) throw new HttpError(400, `state must be one of ${Object.keys(REACTION).join(", ")}`);
+      const at = REACTED_AT[claims.event_name];
+      if (!at) throw new HttpError(409, `a ${claims.event_name} run has no comment to react to`);
+      if (!(await admits(gh, claims.actor))) throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
+      const base = `/repos/${owner}/${repo}`;
+      const asked = ASKED[claims.event_name]!;
+      const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
+      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`);
+      const path = `${base}/${at}/comments/${id}/reactions`;
+      const want = REACTION[body.state]!;
+      const bot = await deps.bot();
+      const stale = (await all<{ id: number; content: string; user: { login: string } | null }>(gh, path)).filter(
+        (r) => r.user?.login === bot && r.content !== want && Object.values(REACTION).includes(r.content),
+      );
+      if (want) await must(gh.rest("POST", path, { content: want }), "react to the comment");
+      for (const r of stale) await gh.rest("DELETE", `${path}/${r.id}`);
+      return { reaction: want };
     },
 
     "POST /publish": async (req) => {
