@@ -62,7 +62,7 @@ affinity: {}
 service:
   port: 80
 
-# Routes /healthz, /allow and /publish through the Gateway API. /metrics is
+# Routes /healthz, /allow, /publish and /reply through the Gateway API. /metrics is
 # never routed.
 httpRoute:
   enabled: false
