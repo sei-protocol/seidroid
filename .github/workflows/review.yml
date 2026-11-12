@@ -139,9 +139,12 @@ jobs:
     if: needs.guard.outputs.run == 'true'
     runs-on: ${{ inputs.runs-on }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # One review per pull request at a time. A review is never cancelled, since that
+    # could stop it halfway through publishing; a newer request waits its turn, and
+    # GitHub keeps only the newest one waiting.
     concurrency:
       group: seidroid-review-${{ github.repository }}-${{ needs.guard.outputs.pr }}
-      cancel-in-progress: true
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
