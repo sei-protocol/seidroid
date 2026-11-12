@@ -88,24 +88,34 @@ test("guard answers a team member's other mentions, outside shadow and never a b
   }
 });
 
-test("conversation shows the review thread up to the comment that asks", async () => {
-  const c = (id: number, login: string, body: string, in_reply_to_id?: number) => ({ id, in_reply_to_id, user: { login }, body, path: "a.go", line: 3, diff_hunk: "@@ -1 +1 @@\n+x" });
-  const comments = [c(1, "seidroid[bot]", "a nit"), c(2, "bob", "elsewhere"), c(3, "alice", "@seidroid why?", 1), c(4, "carol", "later", 1)];
+test("conversation shows what was said before the comment that asks", async () => {
+  const at = (n: number) => `2026-01-01T00:00:0${n}Z`;
+  const c = (id: number, login: string, body: string, in_reply_to_id?: number) => ({ id, in_reply_to_id, user: { login }, body, path: "a.go", line: 3, diff_hunk: "@@ -1 +1 @@\n+x", created_at: at(id) });
+  const code = [c(1, "seidroid[bot]", "a nit"), c(2, "bob", "elsewhere"), c(4, "alice", "@seidroid why?", 1), c(6, "carol", "later", 1)];
+  const issue = [{ id: 3, user: { login: "dave" }, body: "first answer", created_at: at(3) }, { id: 5, user: null, body: "@seidroid explain", created_at: at(5) }];
+  const reviews = [{ id: 9, user: { login: "seidroid[bot]" }, body: "the review", submitted_at: at(0) }, { id: 8, user: { login: "erin" }, body: "", submitted_at: at(2) }];
   const client: GitHub = {
     async rest(_m, path) {
-      if (path.startsWith("/repos/o/r/pulls/7/comments")) return { status: 200, data: comments } as any;
-      if (path === "/repos/o/r/issues/comments/5") return { status: 200, data: c(5, "alice", "@seidroid explain") } as any;
+      if (path.startsWith("/repos/o/r/pulls/7/comments")) return { status: 200, data: code } as any;
+      if (path.startsWith("/repos/o/r/issues/7/comments")) return { status: 200, data: issue } as any;
+      if (path.startsWith("/repos/o/r/pulls/7/reviews?")) return { status: 200, data: reviews } as any;
+      if (path === "/repos/o/r/issues/comments/5") return { status: 200, data: issue[1] } as any;
       return { status: 404, data: {} } as any;
     },
     async graphql() {
       throw new Error("unused");
     },
   };
-  const thread = await conversation(client, "/repos/o/r", 7, "pull_request_review_comment", 3);
-  assert.match(thread, /^# A review thread on a\.go, line 3\n/);
-  assert.ok(thread.indexOf("a nit") < thread.indexOf("@seidroid why?"));
-  assert.ok(!thread.includes("elsewhere") && !thread.includes("later"));
-  assert.match(await conversation(client, "/repos/o/r", 7, "issue_comment", 5), /\*\*alice:\*\*\n\n@seidroid explain/);
+  const order = (text: string, ...want: string[]) => assert.deepEqual(want.map((w) => text.indexOf(w)).toSorted((x, y) => x - y), want.map((w) => text.indexOf(w)), text);
+
+  const thread = await conversation(client, "/repos/o/r", 7, "pull_request_review_comment", 4);
+  order(thread, "# The conversation so far", "the review", "**bob** on a.go, line 3:\n\nelsewhere", "first answer", "# A review thread on a.go, line 3", "a nit", "@seidroid why?");
+  assert.equal(thread.split("a nit").length, 2);
+  assert.ok(!thread.includes("later"));
+
+  const asked = await conversation(client, "/repos/o/r", 7, "issue_comment", 5);
+  order(asked, "the review", "a nit", "elsewhere", "first answer", "@seidroid why?", "# The comment to answer", "**ghost:**\n\n@seidroid explain");
+  assert.ok(!asked.includes("later") && !asked.includes("**erin"));
   await assert.rejects(conversation(client, "/repos/o/r", 7, "pull_request_review_comment", 99), /not on pull request 7/);
 });
 
