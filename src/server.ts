@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { App } from "./app.ts";
-import type { GitHub } from "./github.ts";
+import { all, type GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
 import { publish, type Outcome } from "./publish.ts";
@@ -53,21 +53,24 @@ interface Asked {
 }
 
 /** ASKED is, per event that can ask seidroid something, where its comment is read and where the answer goes. */
-const ASKED: Record<string, { read: (base: string, pr: number, id: number) => string; on: (c: Asked, base: string, pr: number) => boolean; answer: (base: string, pr: number, c: Asked) => string }> = {
+const ASKED: Record<string, { read: (base: string, pr: number, id: number) => string; on: (c: Asked, base: string, pr: number) => boolean; answer: (base: string, pr: number, c: Asked) => string; answers: (base: string, pr: number) => string }> = {
   issue_comment: {
     read: (base, _pr, id) => `${base}/issues/comments/${id}`,
     on: (c, base, pr) => c.issue_url?.endsWith(`${base}/issues/${pr}`) === true,
     answer: (base, pr) => `${base}/issues/${pr}/comments`,
+    answers: (base, pr) => `${base}/issues/${pr}/comments`,
   },
   pull_request_review_comment: {
     read: (base, _pr, id) => `${base}/pulls/comments/${id}`,
     on: (c, base, pr) => c.pull_request_url?.endsWith(`${base}/pulls/${pr}`) === true,
     answer: (base, pr, c) => `${base}/pulls/${pr}/comments/${c.in_reply_to_id ?? c.id}/replies`,
+    answers: (base, pr) => `${base}/pulls/${pr}/comments`,
   },
   pull_request_review: {
     read: (base, pr, id) => `${base}/pulls/${pr}/reviews/${id}`,
     on: () => true,
     answer: (base, pr) => `${base}/issues/${pr}/comments`,
+    answers: (base, pr) => `${base}/issues/${pr}/comments`,
   },
 };
 
@@ -153,7 +156,17 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
       const text = replyBody(body.body, runUrl);
       if (scanSecrets(text)) throw new HttpError(422, "the reply carries a credential");
-      return { url: (await must(gh.rest<{ html_url: string }>("POST", asked.answer(base, pr, c), { body: text }), "post the reply")).html_url };
+      const post = () => gh.rest<{ html_url: string }>("POST", asked.answer(base, pr, c), { body: text });
+      const answer = async () => {
+        const posted = await post();
+        if (posted.status !== 0 && posted.status < 500) return posted;
+        // A failed post may still have landed; the run link makes text unique to this run.
+        await new Promise((r) => setTimeout(r, 1000));
+        const bot = await deps.bot();
+        const landed = (await all<{ body?: string; html_url: string; user: { login: string } | null }>(gh, asked.answers(base, pr))).find((a) => a.user?.login === bot && a.body === text);
+        return landed ? { status: 201, data: landed } : post();
+      };
+      return { url: (await must(answer(), "post the reply")).html_url };
     },
 
     "POST /publish": async (req) => {

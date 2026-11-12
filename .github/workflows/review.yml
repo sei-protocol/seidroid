@@ -270,5 +270,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: seidroid-reply-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/seidroid-out/**/run.json
+          path: |
+            ${{ runner.temp }}/seidroid-out/**/run.json
+            ${{ runner.temp }}/seidroid-out/**/reply.md
           if-no-files-found: ignore

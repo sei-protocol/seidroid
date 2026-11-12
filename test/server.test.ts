@@ -133,6 +133,30 @@ test("allow reports team membership of the actor and the author", async () => {
   }
 });
 
+test("reply retries a post GitHub failed, unless the reply landed anyway", async () => {
+  for (const landed of [false, true]) {
+    let posts = 0;
+    let existing: object[] = [];
+    const s = await serve({
+      ...base,
+      "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+      [`GET ${repo}/issues/comments/5`]: ok({ id: 5, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+      [`GET ${repo}/issues/7/comments?per_page=100&page=1`]: () => ({ status: 200, data: existing }),
+      [`POST ${repo}/issues/7/comments`]: (b: { body: string }) => {
+        if (++posts > 1) return { status: 201, data: { html_url: "retried" } };
+        if (landed) existing = [{ user: { login: "mallory" }, body: b.body, html_url: "x" }, { user: { login: "seidroid[bot]" }, body: b.body, html_url: "landed" }];
+        return { status: 500, data: {} };
+      },
+    });
+    try {
+      const r = await s.call("/reply", { pr: 7, comment: 5, body: "Because." }, claims({ event_name: "issue_comment", ref: "refs/heads/main" }));
+      assert.deepEqual([r.status, r.body, posts], landed ? [200, { url: "landed" }, 1] : [200, { url: "retried" }, 2]);
+    } finally {
+      s.close();
+    }
+  }
+});
+
 test("reply answers the asker's own comment in its thread, as the App", async () => {
   const posted: [string, string][] = [];
   const post = (where: string) => (body: { body: string }) => (posted.push([where, body.body]), { status: 201, data: { html_url: where } });

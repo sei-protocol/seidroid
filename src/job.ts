@@ -300,6 +300,7 @@ async function reply(o: Record<string, string>): Promise<void> {
   const s = submitted(dir) as ReplySubmission | undefined;
   let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
   if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
+  writeFileSync(path.join(dir, "reply.md"), body);
   console.log((await service(o.service, "/reply", { pr, comment, body })).url);
 }
 
