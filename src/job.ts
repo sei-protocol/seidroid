@@ -50,8 +50,13 @@ export const requested = (body: string, phrase: string): boolean =>
   body.split("\n").some((l) => l.trim().split(/\s+/).join(" ").toLowerCase() === `${phrase} review`.toLowerCase());
 
 /** reserved reports whether a comment holds a review command seidroid v1 handles, such as "review close". */
-const reserved = (body: string, phrase: string): boolean =>
-  body.split("\n").some((l) => l.trim().split(/\s+/).join(" ").toLowerCase().startsWith(`${phrase} review close`.toLowerCase()));
+const reserved = (body: string, phrase: string): boolean => {
+  const close = `${phrase} review close`.toLowerCase();
+  return body.split("\n").some((l) => {
+    const line = l.trim().split(/\s+/).join(" ").toLowerCase();
+    return line === close || line.startsWith(`${close} `);
+  });
+};
 
 /** commentOf is the pull request a comment event is on, with the comment and its author, or undefined for any other event. */
 function commentOf(ev: Event): { pr: number; body: string; id: number; bot: boolean } | undefined {

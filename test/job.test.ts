@@ -75,6 +75,8 @@ test("guard answers a team member's other mentions, outside shadow and never a b
     ["an outsider", ask("@seidroid explain", "mallory"), gh(), opts, false, /mallory may not/],
     ["a fork", ask("@seidroid explain"), gh({ head: { sha: "h", repo: { id: 2 } } }), opts, false, /fork/],
     ["a v1 command", ask("@seidroid  review close all"), gh(), opts, false, /does not ask/],
+    ["a bare v1 command", ask("@seidroid review close"), gh(), opts, false, /does not ask/],
+    ["a question starting like a v1 command", ask("@seidroid review closely why?"), gh(), opts, true, /asked/],
   ];
   for (const [name, ev, client, o, reply, reason] of cases) {
     const asked: (number | undefined)[] = [];
