@@ -74,8 +74,8 @@ const ASKED: Record<string, { read: (base: string, pr: number, id: number) => st
   },
 };
 
-/** REACTION is the App's reaction on the comment that started a run, by the run's state, as v1 leaves it. */
-const REACTION: Record<string, string | null> = { working: "eyes", done: "+1", failed: "-1", cancelled: null };
+/** REACTION is the App's reaction on the comment that started a run: eyes while it works, then the review's conclusion, as v1 leaves it. */
+const REACTION: Record<string, string | null> = { working: "eyes", success: "+1", failure: "-1", none: null };
 const REACTED_AT: Record<string, string> = { issue_comment: "issues", pull_request_review_comment: "pulls" };
 
 const MAX_REQUEST = 1 << 20;

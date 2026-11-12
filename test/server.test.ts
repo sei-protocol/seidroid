@@ -194,7 +194,7 @@ test("reply answers the asker's own comment in its thread, as the App", async ()
   }
 });
 
-test("react leaves one App reaction on the asker's comment for the run's state", async () => {
+test("react leaves one App reaction on the asker's comment for where the run got to", async () => {
   const reactions = new Map<string, { id: number; content: string; user: { login: string } }[]>();
   let next = 1;
   const at = (path: string) => reactions.get(path) ?? (reactions.set(path, []), reactions.get(path)!);
@@ -221,20 +221,20 @@ test("react leaves one App reaction on the asker's comment for the run's state",
   const mine = (path: string) => at(path).filter((r) => r.user.login === "seidroid[bot]").map((r) => r.content);
   const asking = (event_name: string, actor = "alice") => claims({ event_name, actor, ref: "refs/heads/main" });
   try {
-    for (const [state, want] of [["working", ["eyes"]], ["working", ["eyes"]], ["done", ["+1"]], ["failed", ["-1"]], ["cancelled", []]] as const) {
+    for (const [state, want] of [["working", ["eyes"]], ["working", ["eyes"]], ["success", ["+1"]], ["failure", ["-1"]], ["none", []]] as const) {
       assert.equal((await s.call("/react", { pr: 7, comment: 5, state }, asking("issue_comment"))).status, 200, state);
       assert.deepEqual(mine(issue), want, state);
     }
     assert.ok(at(issue).some((r) => r.user.login === "alice"));
     await s.call("/react", { pr: 7, comment: 9, state: "working" }, asking("pull_request_review_comment"));
-    await s.call("/react", { pr: 7, comment: 9, state: "done" }, asking("pull_request_review_comment"));
+    await s.call("/react", { pr: 7, comment: 9, state: "success" }, asking("pull_request_review_comment"));
     assert.deepEqual(mine(code), ["+1"]);
     const refused: [unknown, Claims, number][] = [
       [{ pr: 7, comment: 5, state: "smile" }, asking("issue_comment"), 400],
-      [{ pr: 7, comment: 4, state: "done" }, asking("pull_request_review"), 409],
-      [{ pr: 7, comment: 6, state: "done" }, asking("issue_comment"), 403],
-      [{ pr: 7, comment: 5, state: "done" }, asking("issue_comment", "mallory"), 403],
-      [{ pr: 8, comment: 5, state: "done" }, asking("issue_comment"), 403],
+      [{ pr: 7, comment: 4, state: "success" }, asking("pull_request_review"), 409],
+      [{ pr: 7, comment: 6, state: "success" }, asking("issue_comment"), 403],
+      [{ pr: 7, comment: 5, state: "success" }, asking("issue_comment", "mallory"), 403],
+      [{ pr: 8, comment: 5, state: "success" }, asking("issue_comment"), 403],
     ];
     for (const [body, c, status] of refused) assert.equal((await s.call("/react", body, c)).status, status, JSON.stringify([body, c.actor, c.event_name]));
     assert.deepEqual(mine(issue), []);

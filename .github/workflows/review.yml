@@ -166,7 +166,7 @@ jobs:
           cache-dependency-path: .seidroid/package-lock.json
       - run: npm ci --ignore-scripts --omit=dev
         working-directory: .seidroid
-      # The comment that asked gets eyes while the job works, then +1 or -1, as v1 leaves it.
+      # The comment that asked wears eyes while the job works, as v1 does.
       - name: React
         if: inputs.shadow == false && needs.guard.outputs.comment != '0' && github.event_name != 'pull_request_review'
         env:
@@ -187,6 +187,7 @@ jobs:
           key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: seidroid-session-${{ needs.guard.outputs.pr }}-
       - name: Review
+        id: review
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.openai-api-key }}
@@ -216,7 +217,7 @@ jobs:
           SERVICE: ${{ inputs.service-url }}
           PR: ${{ needs.guard.outputs.pr }}
           COMMENT: ${{ needs.guard.outputs.comment }}
-          STATE: ${{ job.status }}
+          STATE: ${{ steps.review.outputs.conclusion || 'none' }}
         run: node .seidroid/src/job.ts react --service "$SERVICE" --pr "$PR" --comment "$COMMENT" --state "$STATE"
       - name: Keep the conversation
         if: always()
@@ -257,7 +258,7 @@ jobs:
           cache-dependency-path: .seidroid/package-lock.json
       - run: npm ci --ignore-scripts --omit=dev
         working-directory: .seidroid
-      # The comment that asked gets eyes while the job works, then +1 or -1, as v1 leaves it.
+      # The comment that asked wears eyes while the job works, as v1 does.
       - name: React
         if: github.event_name != 'pull_request_review'
         env:
@@ -289,14 +290,13 @@ jobs:
           node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT"
           --work reply --out "$RUNNER_TEMP/seidroid-out" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
           --extra-instructions "$EXTRA" --timeout-seconds 600
-      - name: React to the outcome
+      - name: Take the eyes back
         if: always() && github.event_name != 'pull_request_review'
         env:
           SERVICE: ${{ inputs.service-url }}
           PR: ${{ needs.guard.outputs.pr }}
           COMMENT: ${{ needs.guard.outputs.comment }}
-          STATE: ${{ job.status }}
-        run: node .seidroid/src/job.ts react --service "$SERVICE" --pr "$PR" --comment "$COMMENT" --state "$STATE"
+        run: node .seidroid/src/job.ts react --service "$SERVICE" --pr "$PR" --comment "$COMMENT" --state none
       - name: Keep the run record
         if: always()
         uses: actions/upload-artifact@v4

@@ -280,6 +280,7 @@ async function review(o: Record<string, string>): Promise<void> {
   if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
   const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false" });
   console.log(JSON.stringify(report));
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
 }
 
@@ -304,9 +305,9 @@ async function reply(o: Record<string, string>): Promise<void> {
   console.log((await service(o.service, "/reply", { pr, comment, body })).url);
 }
 
-/** react sets the App's reaction on the comment that started the run from the job's state, and only warns when it cannot. */
+/** react sets the App's reaction on the comment that started the run, and only warns when it cannot; a conclusion other than success or failure clears it. */
 async function react(o: Record<string, string>): Promise<void> {
-  const state = ({ success: "done", failure: "failed" } as Record<string, string>)[o.state] ?? o.state;
+  const state = ["working", "success", "failure"].includes(o.state) ? o.state : "none";
   try {
     await service(o.service, "/react", { pr: Number(o.pr), comment: Number(o.comment), state });
   } catch (e) {
