@@ -1,6 +1,7 @@
 import { realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ReplySubmission } from "./reply.ts";
 import { ScoutSubmission } from "./scout.ts";
 import { ReviewSubmission } from "./verdict.ts";
 
@@ -16,6 +17,11 @@ const SUBMIT = {
     name: "submit_findings",
     description: "Submit your reading. Call it once, as your last action.",
     parameters: ScoutSubmission,
+  },
+  reply: {
+    name: "submit_reply",
+    description: "Submit your reply. Call it once, as your last action; nothing else you write is posted.",
+    parameters: ReplySubmission,
   },
 } as const;
 
@@ -39,8 +45,8 @@ export function within(root: string, p: string): string | undefined {
 export default function seidroid(pi: ExtensionAPI): void {
   const out = process.env.SEIDROID_OUT;
   const kind = process.env.SEIDROID_SUBMIT;
-  if (!out || (kind !== "review" && kind !== "scout")) throw new Error("SEIDROID_OUT and SEIDROID_SUBMIT=review|scout are required");
-  const tool = SUBMIT[kind];
+  if (!out || !kind || !Object.hasOwn(SUBMIT, kind)) throw new Error("SEIDROID_OUT and SEIDROID_SUBMIT=review|scout|reply are required");
+  const tool = SUBMIT[kind as keyof typeof SUBMIT];
   const root = process.cwd();
 
   pi.on("tool_call", async (event) => {

@@ -8,8 +8,10 @@ import type { PriorThread } from "./history.ts";
 import { DIFF, INTENT, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
 import { MARKER } from "./render.ts";
 import { run } from "./run.ts";
+import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { readingOf, settleByScouts } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
+import { clip } from "./text.ts";
 
 /** Event is the part of a workflow run's trigger the guard reads. */
 export interface Event {
@@ -23,14 +25,18 @@ export interface GuardOptions {
   skipLabel: string;
   reReviewOnPush: boolean;
   allowedBots: readonly string[];
+  /** In shadow, v1 answers comments, so seidroid only reviews. */
+  shadow: boolean;
 }
 
-/** Gate is the guard's answer: whether to review, and the pull request and comment it is for. */
+/** Gate is the guard's answer: whether to review or to reply, and the pull request and comment it is for. */
 export interface Gate {
   run: boolean;
+  reply: boolean;
   reason: string;
   pr: number;
   head: string;
+  comment: number;
 }
 
 export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }>;
@@ -43,17 +49,26 @@ const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 export const requested = (body: string, phrase: string): boolean =>
   body.split("\n").some((l) => l.trim().split(/\s+/).join(" ").toLowerCase() === `${phrase} review`.toLowerCase());
 
+/** reserved reports whether a comment holds a review command seidroid v1 handles, such as "review close". */
+const reserved = (body: string, phrase: string): boolean => {
+  const close = `${phrase} review close`.toLowerCase();
+  return body.split("\n").some((l) => {
+    const line = l.trim().split(/\s+/).join(" ").toLowerCase();
+    return line === close || line.startsWith(`${close} `);
+  });
+};
+
 /** commentOf is the pull request a comment event is on, with the comment and its author, or undefined for any other event. */
-function commentOf(ev: Event): { pr: number; body: string; id?: number; bot: boolean } | undefined {
+function commentOf(ev: Event): { pr: number; body: string; id: number; bot: boolean } | undefined {
   const p = ev.payload;
   if (ev.name === "issue_comment" && p.action === "created" && p.issue?.pull_request) {
     return { pr: p.issue.number, body: p.comment.body ?? "", id: p.comment.id, bot: p.comment.user?.type === "Bot" };
   }
   if (ev.name === "pull_request_review_comment" && p.action === "created") {
-    return { pr: p.pull_request.number, body: p.comment.body ?? "", bot: p.comment.user?.type === "Bot" };
+    return { pr: p.pull_request.number, body: p.comment.body ?? "", id: p.comment.id, bot: p.comment.user?.type === "Bot" };
   }
   if (ev.name === "pull_request_review" && p.action === "submitted") {
-    return { pr: p.pull_request.number, body: p.review.body ?? "", bot: p.review.user?.type === "Bot" };
+    return { pr: p.pull_request.number, body: p.review.body ?? "", id: p.review.id, bot: p.review.user?.type === "Bot" };
   }
   return undefined;
 }
@@ -61,20 +76,27 @@ function commentOf(ev: Event): { pr: number; body: string; id?: number; bot: boo
 /**
  * guard decides whether this event earns a review. A push reviews a ready, same-repository pull request once,
  * again on later pushes only with re-review on push or to lift this App's change request; a team member or an
- * allowed bot asks for one by comment at any time.
+ * allowed bot asks for one by comment at any time. Any other comment from a team member that mentions the phrase
+ * earns a reply, outside shadow.
  */
 export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow): Promise<Gate> {
-  const deny = (pr: number, reason: string): Gate => ({ run: false, reason, pr, head: "" });
-  const admit = (reason: string): Gate => ({ run: true, reason, pr, head: p.head.sha });
+  const deny = (pr: number, reason: string): Gate => ({ run: false, reply: false, reason, pr, head: "", comment: 0 });
+  const admit = (reason: string): Gate => ({ run: true, reply: false, reason, pr, head: p.head.sha, comment: 0 });
   const asked = commentOf(ev);
+  const question = asked !== undefined && !requested(asked.body, o.phrase);
   let pr: number;
   if (ev.name === "pull_request") {
     pr = ev.payload.pull_request.number;
     if (!PUSH_ACTIONS.includes(ev.payload.action)) return deny(pr, `${ev.payload.action} does not start a review`);
   } else if (asked) {
     pr = asked.pr;
-    if (!requested(asked.body, o.phrase)) return deny(pr, "the comment does not ask for a review");
-    if (asked.bot ? !o.allowedBots.includes(ev.actor) : !(await allow(pr, asked.id)).actor) return deny(pr, `${ev.actor} may not ask for a review`);
+    if (question) {
+      if (!asked.body.toLowerCase().includes(o.phrase.toLowerCase()) || reserved(asked.body, o.phrase)) return deny(pr, "the comment does not ask seidroid anything");
+      if (o.shadow) return deny(pr, "in shadow, seidroid leaves comments to v1");
+      if (asked.bot) return deny(pr, "seidroid does not answer bots");
+    }
+    const react = ev.name === "issue_comment" ? asked.id : undefined;
+    if (asked.bot ? !o.allowedBots.includes(ev.actor) : !(await allow(pr, react)).actor) return deny(pr, `${ev.actor} may not ask seidroid`);
   } else {
     return deny(0, `${ev.name} does not start a review`);
   }
@@ -84,6 +106,7 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   const p = pull.data;
   if (p.state !== "open") return deny(pr, "the pull request is closed");
   if (p.head.repo?.id !== p.base.repo.id) return deny(pr, "the pull request comes from a fork");
+  if (question) return { run: false, reply: true, reason: `${ev.actor} asked seidroid`, pr, head: p.head.sha, comment: asked.id };
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
   if (asked) return admit(`${ev.actor} asked for a review`);
   if (p.draft) return deny(pr, "the pull request is a draft");
@@ -179,18 +202,56 @@ function lay(work: string, pull: any): { diffLines: number; hasStandards: boolea
   return { diffLines: changedLines(diff), hasStandards: standards !== "" };
 }
 
+const MAX_SAID = 8_000;
+const MAX_THREAD = 20;
+
+interface Said {
+  id: number;
+  in_reply_to_id?: number;
+  user: { login: string };
+  body?: string | null;
+  path?: string;
+  line?: number | null;
+  original_line?: number | null;
+  diff_hunk?: string;
+}
+
+/** conversation is the comment event's comment as the reply prompt shows it, after the review thread it ends when it has one. */
+export async function conversation(gh: GitHub, base: string, pr: number, event: string, id: number): Promise<string> {
+  const said = (c: Said) => `**${c.user.login}:**\n\n${clip(c.body ?? "", MAX_SAID)}\n`;
+  if (event === "pull_request_review_comment") {
+    const comments = await all<Said>(gh, `${base}/pulls/${pr}/comments`);
+    const root = comments.find((c) => c.id === id)?.in_reply_to_id ?? id;
+    const thread = comments.filter((c) => (c.id === root || c.in_reply_to_id === root) && c.id <= id);
+    const top = thread[0];
+    if (top?.id !== root || thread.at(-1)!.id !== id) throw new Error(`comment ${id} is not on pull request ${pr}`);
+    const where = `${top.path}, line ${top.line ?? top.original_line}`;
+    return [`# A review thread on ${where}`, "", "````diff", clip(top.diff_hunk ?? "", MAX_SAID), "````", "", ...thread.slice(-MAX_THREAD).map(said)].join("\n");
+  }
+  const got = await gh.rest<Said>("GET", event === "issue_comment" ? `${base}/issues/comments/${id}` : `${base}/pulls/${pr}/reviews/${id}`);
+  if (got.status !== 200) throw new Error(`could not read comment ${id}: ${got.status}`);
+  return ["# A comment on the pull request", "", said(got.data)].join("\n");
+}
+
 const lines = (s: string): string[] => s.split(/[\s,]+/).filter((x) => x !== "");
 const submitted = (dir: string): unknown => (existsSync(path.join(dir, "submission.json")) ? JSON.parse(readFileSync(path.join(dir, "submission.json"), "utf8")) : undefined);
 const failed = (dir: string): string => JSON.parse(readFileSync(path.join(dir, "run.json"), "utf8")).error || "it did not submit";
+
+const held = (): string[] => ["GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN", "OPENAI_API_KEY"].map((k) => process.env[k] ?? "");
+
+/** pullAt reads the pull request with its head pinned to the commit the guard saw. */
+async function pullAt(gh: GitHub, base: string, pr: number, head: string): Promise<any> {
+  const got = await gh.rest<any>("GET", `${base}/pulls/${pr}`);
+  if (got.status !== 200) throw new Error(`could not read pull request ${pr}: ${got.status}`);
+  return { ...got.data, head: { ...got.data.head, sha: head } };
+}
 
 /** review runs the scouts, then the review unless the scouts settle it, and publishes the outcome through the service. */
 async function review(o: Record<string, string>): Promise<void> {
   const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
   const gh = client(process.env.GITHUB_TOKEN!);
   const pr = Number(o.pr);
-  const got = await gh.rest<any>("GET", `/repos/${owner}/${repo}/pulls/${pr}`);
-  if (got.status !== 200) throw new Error(`could not read pull request ${pr}: ${got.status}`);
-  const pull = { ...got.data, head: { ...got.data.head, sha: o.head } };
+  const pull = await pullAt(gh, `/repos/${owner}/${repo}`, pr, o.head);
   const work = path.resolve(o.work);
   const { diffLines, hasStandards } = lay(work, pull);
   process.chdir(work);
@@ -216,27 +277,47 @@ async function review(o: Record<string, string>): Promise<void> {
     const s = submitted(dir);
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
-  const held = ["GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN", "OPENAI_API_KEY"].map((k) => process.env[k] ?? "");
-  if (scanSecrets(JSON.stringify(outcome), held)) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
+  if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
   const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false" });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
 }
 
+/** reply answers the comment that asked seidroid, in its thread, through the service. */
+async function reply(o: Record<string, string>): Promise<void> {
+  const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
+  const gh = client(process.env.GITHUB_TOKEN!);
+  const base = `/repos/${owner}/${repo}`;
+  const pr = Number(o.pr);
+  const comment = Number(o.comment);
+  const work = path.resolve(o.work);
+  const { diffLines } = lay(work, await pullAt(gh, base, pr, o.head));
+  writeFileSync(path.join(work, QUESTION), await conversation(gh, base, pr, process.env.GITHUB_EVENT_NAME!, comment));
+  process.chdir(work);
+  const dir = path.join(o.out, "reply");
+  const request = { repo: `${owner}/${repo}`, pr, diffLines, extraInstructions: o["extra-instructions"] || undefined };
+  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000 });
+  const s = submitted(dir) as ReplySubmission | undefined;
+  let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
+  if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
+  console.log((await service(o.service, "/reply", { pr, comment, body })).url);
+}
+
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment",
 ];
 
 async function main(): Promise<void> {
   const { positionals, values: o } = parseArgs({ allowPositionals: true, options: Object.fromEntries(OPTIONS.map((k) => [k, { type: "string" as const, default: "" }])) });
   if (positionals[0] === "review") return review(o);
-  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review [--option value ...]");
+  if (positionals[0] === "reply") return reply(o);
+  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply [--option value ...]");
   const ev: Event = { name: process.env.GITHUB_EVENT_NAME!, actor: process.env.GITHUB_ACTOR!, payload: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8")) };
-  const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]) };
+  const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]), shadow: o.shadow !== "false" };
   const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }));
   console.log(gate.reason);
-  appendFileSync(process.env.GITHUB_OUTPUT!, `run=${gate.run}\npr=${gate.pr}\nhead=${gate.head}\n`);
+  appendFileSync(process.env.GITHUB_OUTPUT!, `run=${gate.run}\nreply=${gate.reply}\npr=${gate.pr}\nhead=${gate.head}\ncomment=${gate.comment}\n`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { followUpPrompt, reviewPrompt, type Request } from "./prompt.ts";
+import { replyPrompt, type ReplyRequest } from "./reply.ts";
 import { scoutPrompt, type ScoutRequest } from "./scout.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -16,7 +17,7 @@ const OIDC_REQUEST_MS = 30_000;
 /** Credentials the model's process never needs; the runner keeps them to itself. */
 const WITHHELD_ENV = ["ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"];
 
-export type Role = "review" | "scout";
+export type Role = "review" | "scout" | "reply";
 
 export interface Stats {
   turns: number;
@@ -49,7 +50,7 @@ export function tally(stats: Stats, record: string): void {
   if (m.stopReason === "error" || m.stopReason === "aborted") stats.error = m.errorMessage || m.stopReason;
 }
 
-export const submitTool = (role: Role): string => (role === "review" ? "submit_review" : "submit_findings");
+export const submitTool = (role: Role): string => ({ review: "submit_review", scout: "submit_findings", reply: "submit_reply" })[role];
 
 /** piArgs is pi's command line: headless, read-only tools plus the submit tool, and nothing loaded from the checkout. */
 export function piArgs(role: Role, model: string, thinking: string, sessionDir?: string): string[] {
@@ -90,6 +91,7 @@ async function keepIdentityTokenFresh(): Promise<() => void> {
 
 function promptFor(role: Role, request: unknown, sessionDir?: string): string {
   if (role === "scout") return scoutPrompt(request as ScoutRequest);
+  if (role === "reply") return replyPrompt(request as ReplyRequest);
   return sessionDir && hasSession(sessionDir) ? followUpPrompt(request as Request) : reviewPrompt(request as Request);
 }
 

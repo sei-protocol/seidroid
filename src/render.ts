@@ -17,6 +17,7 @@ export const MARKER = {
   verdict: "<!-- seidroid-review -->",
   finding: "<!-- seidroid-review:finding -->",
   noVerdict: "<!-- seidroid-review:no-verdict -->",
+  reply: "<!-- seidroid-reply -->",
 } as const;
 
 const MAX_BODY = 60_000;
@@ -180,3 +181,6 @@ export function noVerdict(reason: string, runUrl: string): { comment: string; ch
     check: { conclusion: "failure", title: "No verdict", summary: why },
   };
 }
+
+/** replyBody is an answer to a comment, posted as is. */
+export const replyBody = (text: string, runUrl: string): string => `${MARKER.reply}\n${fit(text)}\n\n<sub>seidroid v2 · [run](${runUrl})</sub>`;
