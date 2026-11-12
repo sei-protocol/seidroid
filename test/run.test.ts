@@ -22,6 +22,8 @@ test("piArgs loads nothing from the checkout and offers only read tools", () => 
   assert.equal(a[a.indexOf("--tools") + 1], "read,grep,find,ls,submit_review");
   assert.deepEqual(a.slice(-4), ["--session-dir", "/s", "--session-id", "seidroid"]);
   assert.equal(piArgs("scout", "openai/gpt", "high").at(-1), "--no-session");
+  const r = piArgs("reply", "anthropic/claude-opus", "high");
+  assert.equal(r[r.indexOf("--tools") + 1], "read,grep,find,ls,submit_reply");
 });
 
 test("run records a failed credential request in run.json without starting pi", async () => {

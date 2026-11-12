@@ -33,7 +33,7 @@ on:
         type: string
         default: https://seidroid.dev.platform.sei.io
       shadow:
-        description: Publish only the check run, leaving the conversation to another reviewer.
+        description: Publish only the check run and answer no comments, leaving the conversation to another reviewer.
         type: boolean
         default: true
       trigger-phrase:
@@ -94,8 +94,10 @@ jobs:
       id-token: write
     outputs:
       run: ${{ steps.guard.outputs.run }}
+      reply: ${{ steps.guard.outputs.reply }}
       pr: ${{ steps.guard.outputs.pr }}
       head: ${{ steps.guard.outputs.head }}
+      comment: ${{ steps.guard.outputs.comment }}
       repo: ${{ steps.self.outputs.repo }}
       sha: ${{ steps.self.outputs.sha }}
     steps:
@@ -130,9 +132,10 @@ jobs:
           BOTS: ${{ inputs.allowed-bots }}
           SKIP: ${{ inputs.skip-review-label }}
           RE_REVIEW: ${{ inputs.re-review-on-push }}
+          SHADOW: ${{ inputs.shadow }}
         run: >-
           node .seidroid/src/job.ts guard --service "$SERVICE" --trigger-phrase "$PHRASE"
-          --allowed-bots "$BOTS" --skip-review-label "$SKIP" --re-review-on-push "$RE_REVIEW"
+          --allowed-bots "$BOTS" --skip-review-label "$SKIP" --re-review-on-push "$RE_REVIEW" --shadow "$SHADOW"
 
   review:
     needs: guard
@@ -207,5 +210,62 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: seidroid-runs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/seidroid-out/**/run.json
+          if-no-files-found: ignore
+
+  # A comment that mentions the phrase without asking for a review gets an answer in its
+  # thread. Replies run side by side, so none waits behind a review or drops another.
+  reply:
+    needs: guard
+    if: needs.guard.outputs.reply == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.guard.outputs.repo }}
+          ref: ${{ needs.guard.outputs.sha }}
+          path: .seidroid
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: .seidroid/package-lock.json
+      - run: npm ci --ignore-scripts --omit=dev
+        working-directory: .seidroid
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.guard.outputs.head }}
+          path: reply/tree
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reply
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_FDRL_ID }}
+          ANTHROPIC_ORGANIZATION_ID: ${{ vars.SEI_LABS_ANTHROPIC_ORG_ID }}
+          ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_SVAC_ID }}
+          ANTHROPIC_IDENTITY_TOKEN_FILE: ${{ runner.temp }}/anthropic-identity-token
+          SERVICE: ${{ inputs.service-url }}
+          PR: ${{ needs.guard.outputs.pr }}
+          HEAD: ${{ needs.guard.outputs.head }}
+          COMMENT: ${{ needs.guard.outputs.comment }}
+          REVIEW_MODEL: ${{ inputs.review-model }}
+          THINKING: ${{ inputs.thinking }}
+          EXTRA: ${{ inputs.extra-instructions }}
+        run: >-
+          node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT"
+          --work reply --out "$RUNNER_TEMP/seidroid-out" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
+          --extra-instructions "$EXTRA" --timeout-seconds 600
+      - name: Keep the run record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seidroid-reply-${{ github.run_attempt }}
           path: ${{ runner.temp }}/seidroid-out/**/run.json
           if-no-files-found: ignore

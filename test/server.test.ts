@@ -14,11 +14,11 @@ const claims = (over: Partial<Claims> = {}): Claims => ({
   actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
 });
 
-async function serve(routes: Record<string, () => Response>) {
+async function serve(routes: Record<string, (body?: any) => Response>) {
   const published: { target: Target; outcome: Outcome }[] = [];
   const tokens = new Map<string, Claims>();
   const gh: GitHub = {
-    rest: async (method, path): Promise<any> => (routes[`${method} ${path}`] ?? (() => ({ status: 404, data: {} })))(),
+    rest: async (method, path, body): Promise<any> => (routes[`${method} ${path}`] ?? (() => ({ status: 404, data: {} })))(body),
     graphql: async (): Promise<any> => ({}),
   };
   const h = handler(cfg, {
@@ -40,7 +40,7 @@ async function serve(routes: Record<string, () => Response>) {
 
 const ok = (data: object) => () => ({ status: 200, data });
 const repo = "/repos/sei-protocol/sei-chain";
-const base: Record<string, () => Response> = {
+const base: Record<string, (body?: any) => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
   [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
   [`GET ${repo}/contents/REVIEW.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- the legacy store keeps its lock\n").toString("base64") }),
@@ -128,6 +128,43 @@ test("allow reports team membership of the actor and the author", async () => {
     assert.deepEqual(reacted, ["alice", "dependabot[bot]"]);
     const m = await (await fetch(`${s.url}/metrics`)).text();
     assert.match(m, /seidroid_requests_total\{route="POST \/allow",code="200"\} 4/);
+  } finally {
+    s.close();
+  }
+});
+
+test("reply answers the asker's own comment in its thread, as the App", async () => {
+  const posted: [string, string][] = [];
+  const post = (where: string) => (body: { body: string }) => (posted.push([where, body.body]), { status: 201, data: { html_url: where } });
+  const s = await serve({
+    ...base,
+    "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+    "GET /orgs/sei-protocol/teams/eng/memberships/mallory": ok({ state: "pending" }),
+    [`GET ${repo}/issues/comments/5`]: ok({ id: 5, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+    [`GET ${repo}/issues/comments/6`]: ok({ id: 6, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/8` }),
+    [`GET ${repo}/pulls/comments/9`]: ok({ id: 9, in_reply_to_id: 3, user: { login: "alice" }, pull_request_url: `https://api.github.com${repo}/pulls/7` }),
+    [`GET ${repo}/pulls/7/reviews/4`]: ok({ id: 4, user: { login: "bob" } }),
+    [`POST ${repo}/issues/7/comments`]: post("conversation"),
+    [`POST ${repo}/pulls/7/comments/3/replies`]: post("thread"),
+  });
+  const asking = (event_name: string, actor = "alice") => claims({ event_name, actor, ref: "refs/heads/main" });
+  try {
+    const r = await s.call("/reply", { pr: 7, comment: 5, body: "Because." }, asking("issue_comment"));
+    assert.deepEqual([r.status, r.body], [200, { url: "conversation" }]);
+    assert.equal((await s.call("/reply", { pr: 7, comment: 9, body: "Inline." }, asking("pull_request_review_comment"))).status, 200);
+    assert.deepEqual(posted.map(([where]) => where), ["conversation", "thread"]);
+    assert.match(posted[0]![1], /^<!-- seidroid-reply -->\nBecause\.\n\n<sub>seidroid v2 · \[run\]\(https:\/\/github\.com\/sei-protocol\/sei-chain\/actions\/runs\/9\/attempts\/2\)<\/sub>$/);
+    const refused: [unknown, Claims, number][] = [
+      [{ pr: 7, comment: 6, body: "x" }, asking("issue_comment"), 403],
+      [{ pr: 7, comment: 4, body: "x" }, asking("pull_request_review"), 403],
+      [{ pr: 7, comment: 5, body: "x" }, asking("issue_comment", "mallory"), 403],
+      [{ pr: 7, comment: 5, body: "x" }, asking("issue_comment", "dependabot[bot]"), 403],
+      [{ pr: 7, comment: 5, body: "x" }, claims(), 403],
+      [{ pr: 7, comment: 5, body: " " }, asking("issue_comment"), 400],
+      [{ pr: 7, comment: 5, body: "ghp_" + "a".repeat(36) }, asking("issue_comment"), 422],
+    ];
+    for (const [body, c, status] of refused) assert.equal((await s.call("/reply", body, c)).status, status, JSON.stringify([body, c.actor, c.event_name]));
+    assert.equal(posted.length, 2);
   } finally {
     s.close();
   }

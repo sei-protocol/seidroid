@@ -5,6 +5,8 @@ import type { GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
 import { publish, type Outcome } from "./publish.ts";
+import { replyBody } from "./render.ts";
+import { scanSecrets } from "./secrets.ts";
 import { clip, oneLine } from "./text.ts";
 import { parseSubmission, verdictOf } from "./verdict.ts";
 
@@ -41,6 +43,33 @@ interface Pull {
   head: { sha: string; repo: { id: number } | null };
   base: { sha: string; repo: { id: number } };
 }
+
+interface Asked {
+  id: number;
+  user: { login: string };
+  issue_url?: string;
+  pull_request_url?: string;
+  in_reply_to_id?: number;
+}
+
+/** ASKED is, per event that can ask seidroid something, where its comment is read and where the answer goes. */
+const ASKED: Record<string, { read: (base: string, pr: number, id: number) => string; on: (c: Asked, base: string, pr: number) => boolean; answer: (base: string, pr: number, c: Asked) => string }> = {
+  issue_comment: {
+    read: (base, _pr, id) => `${base}/issues/comments/${id}`,
+    on: (c, base, pr) => c.issue_url?.endsWith(`${base}/issues/${pr}`) === true,
+    answer: (base, pr) => `${base}/issues/${pr}/comments`,
+  },
+  pull_request_review_comment: {
+    read: (base, _pr, id) => `${base}/pulls/comments/${id}`,
+    on: (c, base, pr) => c.pull_request_url?.endsWith(`${base}/pulls/${pr}`) === true,
+    answer: (base, pr, c) => `${base}/pulls/${pr}/comments/${c.in_reply_to_id ?? c.id}/replies`,
+  },
+  pull_request_review: {
+    read: (base, pr, id) => `${base}/pulls/${pr}/reviews/${id}`,
+    on: () => true,
+    answer: (base, pr) => `${base}/issues/${pr}/comments`,
+  },
+};
 
 const MAX_REQUEST = 1 << 20;
 const SHA = /^[0-9a-f]{40}$/;
@@ -107,6 +136,26 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       return { actor, author: await admits(gh, author) };
     },
 
+    "POST /reply": async (req) => {
+      const { claims, gh, owner, repo } = await authorize(req);
+      const body = await json(req);
+      const pr = positive(body.pr, "pr");
+      const id = positive(body.comment, "comment");
+      if (typeof body.body !== "string" || body.body.trim() === "") throw new HttpError(400, "body must be the reply");
+      const asked = Object.hasOwn(ASKED, claims.event_name) ? ASKED[claims.event_name]! : undefined;
+      if (!asked || cfg.bots.includes(claims.actor)) throw new HttpError(403, "only a person's comment is answered");
+      const base = `/repos/${owner}/${repo}`;
+      const pull = await must(gh.rest<Pull>("GET", `${base}/pulls/${pr}`), "read the pull request");
+      if (pull.state !== "open") throw new HttpError(409, `pull request ${pr} is ${pull.state}`);
+      await admitted(gh, claims, pr, pull);
+      const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
+      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`);
+      const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
+      const text = replyBody(body.body, runUrl);
+      if (scanSecrets(text)) throw new HttpError(422, "the reply carries a credential");
+      return { url: (await must(gh.rest<{ html_url: string }>("POST", asked.answer(base, pr, c), { body: text }), "post the reply")).html_url };
+    },
+
     "POST /publish": async (req) => {
       const { claims, gh, owner, repo } = await authorize(req);
       const body = await json(req);
@@ -168,7 +217,7 @@ async function outcomeOf(gh: GitHub, base: string, baseSha: string, raw: any): P
 async function must<T>(p: Promise<{ status: number; data: T }>, what: string): Promise<T> {
   const { status, data } = await p;
   if (status === 404) throw new HttpError(404, `could not ${what}: not found`);
-  if (status !== 200) throw new Error(`could not ${what}: ${status}`);
+  if (status < 200 || status > 299) throw new Error(`could not ${what}: ${status}`);
   return data;
 }
 
