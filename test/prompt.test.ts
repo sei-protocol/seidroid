@@ -26,6 +26,9 @@ test("reviewPrompt adapts to what the job could lay out", () => {
   assert.match(p, /There is no tree for this pull request/);
   assert.doesNotMatch(p, /standards\.md/);
   assert.match(p, /asks for nits/);
+  assert.doesNotMatch(p, /bash/);
+  assert.match(reviewPrompt(req({ hasShell: true })), /You also have bash, in a sandbox with no network/);
+  assert.doesNotMatch(reviewPrompt(req({ hasShell: true, hasTree: false })), /bash/);
 });
 
 test("extra instructions are trimmed, clipped and omitted when blank", () => {

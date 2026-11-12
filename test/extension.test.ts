@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import path from "node:path";
 import seidroid, { within } from "../src/extension.ts";
+import { canSandbox } from "../src/sandbox.ts";
 
 const root = mkdtempSync(path.join(tmpdir(), "seidroid-"));
 mkdirSync(path.join(root, "tree"));
@@ -42,4 +43,29 @@ test("the extension gates tools and writes the submission", async () => {
   const result = await tool!.execute("1", { read: 1, decision: "approve", summary: "ok" });
   assert.equal(result.terminate, true);
   assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), { read: 1, decision: "approve", summary: "ok" });
+});
+
+test("with a home, bash is offered and runs in the sandbox", async () => {
+  type Tool = { name: string; execute: (...a: unknown[]) => Promise<{ content: { text: string }[] }> };
+  type Handler = (e: { toolName: string; input: Record<string, unknown> }) => Promise<{ block: true } | undefined>;
+  const tools: Tool[] = [];
+  let gate: Handler | undefined;
+  const home = mkdtempSync(path.join(tmpdir(), "home-"));
+  const cwd = process.cwd();
+  Object.assign(process.env, { SEIDROID_OUT: path.join(root, "submission.json"), SEIDROID_SUBMIT: "review", SEIDROID_HOME: home, SEIDROID_PROBE: "held" });
+  process.chdir(root);
+  try {
+    seidroid({ on: (_: string, h: Handler) => (gate = h), registerTool: (t: Tool) => tools.push(t) } as never);
+  } finally {
+    process.chdir(cwd);
+    delete process.env.SEIDROID_HOME;
+  }
+  assert.deepEqual(tools.map((t) => t.name), ["bash", "submit_review"]);
+  assert.equal(await gate!({ toolName: "bash", input: { command: "env" } }), undefined);
+  assert.ok(await gate!({ toolName: "write", input: { path: "x" } }));
+  if (!canSandbox()) return;
+  const r = await tools[0].execute("1", { command: "env; echo home=$HOME" }, undefined, undefined, {});
+  const text = r.content.map((c) => c.text).join("");
+  assert.match(text, new RegExp(`home=${home}`));
+  assert.doesNotMatch(text, /SEIDROID_PROBE|SEIDROID_OUT/);
 });

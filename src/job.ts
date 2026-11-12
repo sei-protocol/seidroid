@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -8,6 +9,7 @@ import type { PriorThread } from "./history.ts";
 import { DIFF, INTENT, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
 import { MARKER } from "./render.ts";
 import { run } from "./run.ts";
+import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { readingOf, settleByScouts } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
@@ -246,6 +248,31 @@ async function pullAt(gh: GitHub, base: string, pr: number, head: string): Promi
   return { ...got.data, head: { ...got.data.head, sha: head } };
 }
 
+const PREPARE_MS = 15 * 60_000;
+
+/**
+ * shellHome readies the review's sandboxed shell and returns its home, after running the
+ * caller's prepare command in the tree with the network; undefined when no shell is asked
+ * for or the runner cannot sandbox one.
+ */
+function shellHome(o: Record<string, string>, work: string): string | undefined {
+  if (!o.home) return undefined;
+  if (!canSandbox()) {
+    console.log("::warning::bubblewrap cannot sandbox a shell here, so the review only reads");
+    return undefined;
+  }
+  mkdirSync(o.home, { recursive: true });
+  if (o.prepare) {
+    const jail = { work, home: o.home, path: process.env.PATH ?? "/usr/bin:/bin", net: true };
+    const stop = randomUUID();
+    console.log(`::stop-commands::${stop}`);
+    const r = spawnSync("bwrap", [...bwrapArgs(jail, path.join(work, TREE)), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS });
+    console.log(`::${stop}::`);
+    if (r.status !== 0) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the review's shell may lack what the tree needs`);
+  }
+  return o.home;
+}
+
 /** review runs the scouts, then the review unless the scouts settle it, and publishes the outcome through the service. */
 async function review(o: Record<string, string>): Promise<void> {
   const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
@@ -254,6 +281,7 @@ async function review(o: Record<string, string>): Promise<void> {
   const pull = await pullAt(gh, `/repos/${owner}/${repo}`, pr, o.head);
   const work = path.resolve(o.work);
   const { diffLines, hasStandards } = lay(work, pull);
+  const home = shellHome(o, work);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
 
@@ -271,9 +299,9 @@ async function review(o: Record<string, string>): Promise<void> {
     outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
   } else {
     const threads = await priorThreads(gh, owner, repo, pr);
-    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, includeNits, extraInstructions: o["extra-instructions"] || undefined, scouts, threads };
+    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
-    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined });
+    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home });
     const s = submitted(dir);
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
@@ -306,7 +334,7 @@ async function reply(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "home", "prepare",
 ];
 
 async function main(): Promise<void> {

@@ -52,13 +52,13 @@ export function tally(stats: Stats, record: string): void {
 
 export const submitTool = (role: Role): string => ({ review: "submit_review", scout: "submit_findings", reply: "submit_reply" })[role];
 
-/** piArgs is pi's command line: headless, read-only tools plus the submit tool, and nothing loaded from the checkout. */
-export function piArgs(role: Role, model: string, thinking: string, sessionDir?: string): string[] {
+/** piArgs is pi's command line: headless, read-only tools (and a sandboxed shell when asked) plus the submit tool, and nothing loaded from the checkout. */
+export function piArgs(role: Role, model: string, thinking: string, sessionDir?: string, shell = false): string[] {
   return [
     "--mode", "json",
     "--no-context-files", "--no-approve", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-mcp", "--no-themes",
     "--extension", EXTENSION,
-    "--tools", `read,grep,find,ls,${submitTool(role)}`,
+    "--tools", `read,grep,find,ls,${shell ? "bash," : ""}${submitTool(role)}`,
     "--model", model,
     "--thinking", thinking,
     ...(sessionDir ? ["--session-dir", sessionDir, "--session-id", SESSION_ID] : ["--no-session"]),
@@ -96,12 +96,12 @@ function promptFor(role: Role, request: unknown, sessionDir?: string): string {
 }
 
 /** run drives one pi conversation and writes submission.json (if the model submitted) and run.json to outDir. */
-export async function run(o: { role: Role; request: unknown; outDir: string; model: string; thinking: string; timeoutMs: number; sessionDir?: string }): Promise<void> {
+export async function run(o: { role: Role; request: unknown; outDir: string; model: string; thinking: string; timeoutMs: number; sessionDir?: string; home?: string }): Promise<void> {
   mkdirSync(o.outDir, { recursive: true });
   const submission = path.join(o.outDir, "submission.json");
   rmSync(submission, { force: true });
   const prompt = promptFor(o.role, o.request, o.sessionDir);
-  const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role };
+  const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role, ...(o.home ? { SEIDROID_HOME: o.home } : {}) };
   for (const k of WITHHELD_ENV) delete env[k];
 
   const started = Date.now();
@@ -116,7 +116,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
     stats.error = `no model credential: ${e instanceof Error ? e.message : String(e)}`;
     return record(null, false);
   }
-  const child = spawn(process.execPath, [PI, ...piArgs(o.role, o.model, o.thinking, o.sessionDir)], { env, stdio: ["pipe", "pipe", "inherit"] });
+  const child = spawn(process.execPath, [PI, ...piArgs(o.role, o.model, o.thinking, o.sessionDir, o.home !== undefined)], { env, stdio: ["pipe", "pipe", "inherit"] });
   const timer = setTimeout(() => {
     stats.error = `timed out after ${o.timeoutMs / 1000}s`;
     child.kill("SIGTERM");
