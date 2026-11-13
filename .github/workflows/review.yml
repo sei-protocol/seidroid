@@ -206,7 +206,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Restore the conversation
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/seidroid-session
           key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -252,7 +252,7 @@ jobs:
         run: node .seidroid/src/job.ts react --service "$SERVICE" --pr "$PR" --comment "$COMMENT" --state "$STATE"
       - name: Keep the conversation
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/seidroid-session
           key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
