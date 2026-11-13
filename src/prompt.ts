@@ -33,6 +33,8 @@ export interface Request {
   diffLines: number;
   hasTree: boolean;
   hasStandards: boolean;
+  /** hasShell is set when the review has a sandboxed bash to build and test the tree with. */
+  hasShell?: boolean;
   includeNits: boolean;
   extraInstructions?: string;
   scouts: readonly ScoutReading[];
@@ -54,7 +56,8 @@ export function location(file: string, line: number): string {
 }
 
 function readStep(req: Request): string[] {
-  const tree = req.hasTree ? prose("tree", { tree: TREE }) : prose("no-tree");
+  const shell = req.hasTree && req.hasShell ? `\n\n${prose("shell", { tree: TREE })}` : "";
+  const tree = req.hasTree ? prose("tree", { tree: TREE }) + shell : prose("no-tree");
   return block("read", { diff: DIFF, lines: req.diffLines, tree });
 }
 
