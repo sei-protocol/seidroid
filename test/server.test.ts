@@ -197,3 +197,52 @@ test("reply answers the asker's own comment in its thread, as the App", async ()
     s.close();
   }
 });
+
+test("react leaves one App reaction on the asker's comment for where the run got to", async () => {
+  const reactions = new Map<string, { id: number; content: string; user: { login: string } }[]>();
+  let next = 1;
+  const at = (path: string) => reactions.get(path) ?? (reactions.set(path, []), reactions.get(path)!);
+  const issue = `${repo}/issues/comments/5/reactions`;
+  const code = `${repo}/pulls/comments/9/reactions`;
+  at(issue).push({ id: next++, content: "eyes", user: { login: "alice" } });
+  const routes: Record<string, (body?: any) => Response> = {
+    ...base,
+    "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+    "GET /orgs/sei-protocol/teams/eng/memberships/mallory": ok({ state: "pending" }),
+    [`GET ${repo}/issues/comments/5`]: ok({ id: 5, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+    [`GET ${repo}/issues/comments/6`]: ok({ id: 6, user: { login: "bob" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+    [`GET ${repo}/pulls/comments/9`]: ok({ id: 9, user: { login: "alice" }, pull_request_url: `https://api.github.com${repo}/pulls/7` }),
+  };
+  for (const path of [issue, code]) {
+    routes[`GET ${path}?per_page=100&page=1`] = () => ({ status: 200, data: at(path) });
+    routes[`POST ${path}`] = (b: { content: string }) => {
+      if (!at(path).some((r) => r.user.login === "seidroid[bot]" && r.content === b.content)) at(path).push({ id: next++, content: b.content, user: { login: "seidroid[bot]" } });
+      return { status: 201, data: {} };
+    };
+    for (let id = 1; id <= 20; id++) routes[`DELETE ${path}/${id}`] = () => (reactions.set(path, at(path).filter((r) => r.id !== id)), { status: 204, data: {} });
+  }
+  const s = await serve(routes);
+  const mine = (path: string) => at(path).filter((r) => r.user.login === "seidroid[bot]").map((r) => r.content);
+  const asking = (event_name: string, actor = "alice") => claims({ event_name, actor, ref: "refs/heads/main" });
+  try {
+    for (const [state, want] of [["working", ["eyes"]], ["working", ["eyes"]], ["success", ["+1"]], ["failure", ["-1"]], ["none", []]] as const) {
+      assert.equal((await s.call("/react", { pr: 7, comment: 5, state }, asking("issue_comment"))).status, 200, state);
+      assert.deepEqual(mine(issue), want, state);
+    }
+    assert.ok(at(issue).some((r) => r.user.login === "alice"));
+    await s.call("/react", { pr: 7, comment: 9, state: "working" }, asking("pull_request_review_comment"));
+    await s.call("/react", { pr: 7, comment: 9, state: "success" }, asking("pull_request_review_comment"));
+    assert.deepEqual(mine(code), ["+1"]);
+    const refused: [unknown, Claims, number][] = [
+      [{ pr: 7, comment: 5, state: "smile" }, asking("issue_comment"), 400],
+      [{ pr: 7, comment: 4, state: "success" }, asking("pull_request_review"), 409],
+      [{ pr: 7, comment: 6, state: "success" }, asking("issue_comment"), 403],
+      [{ pr: 7, comment: 5, state: "success" }, asking("issue_comment", "mallory"), 403],
+      [{ pr: 8, comment: 5, state: "success" }, asking("issue_comment"), 403],
+    ];
+    for (const [body, c, status] of refused) assert.equal((await s.call("/react", body, c)).status, status, JSON.stringify([body, c.actor, c.event_name]));
+    assert.deepEqual(mine(issue), []);
+  } finally {
+    s.close();
+  }
+});
