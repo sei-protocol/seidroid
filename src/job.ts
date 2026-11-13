@@ -296,14 +296,14 @@ async function pullAt(gh: GitHub, base: string, pr: number, head: string): Promi
 const PREPARE_MS = 15 * 60_000;
 
 /**
- * shellHome readies the review's sandboxed shell and returns its home, after running the
+ * shellHome readies the sandboxed shell of a review or reply and returns its home, after running the
  * caller's prepare command in the tree with the network; undefined when no shell is asked
  * for or the runner cannot sandbox one.
  */
 function shellHome(o: Record<string, string>, work: string): string | undefined {
   if (!o.home) return undefined;
   if (!canSandbox()) {
-    console.log("::warning::bubblewrap cannot sandbox a shell here, so the review only reads");
+    console.log("::warning::bubblewrap cannot sandbox a shell here, so the model only reads");
     return undefined;
   }
   mkdirSync(o.home, { recursive: true });
@@ -313,7 +313,7 @@ function shellHome(o: Record<string, string>, work: string): string | undefined 
     console.log(`::stop-commands::${stop}`);
     const r = spawnSync("bwrap", [...bwrapArgs(jail), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS, env: { PATH: jail.path } });
     console.log(`::${stop}::`);
-    if (r.status !== 0) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the review's shell may lack what the tree needs`);
+    if (r.status !== 0) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the shell may lack what the tree needs`);
   }
   return o.home;
 }
@@ -370,10 +370,11 @@ async function reply(o: Record<string, string>): Promise<void> {
   const work = path.resolve(o.work);
   const { diffLines } = lay(work, await pullAt(gh, base, pr, o.head));
   writeFileSync(path.join(work, QUESTION), await conversation(gh, base, pr, process.env.GITHUB_EVENT_NAME!, comment));
+  const home = shellHome(o, work);
   process.chdir(work);
   const dir = path.join(o.out, "reply");
-  const request = { repo: `${owner}/${repo}`, pr, diffLines, extraInstructions: o["extra-instructions"] || undefined };
-  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000 });
+  const request = { repo: `${owner}/${repo}`, pr, diffLines, hasShell: home !== undefined, extraInstructions: o["extra-instructions"] || undefined };
+  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000, home });
   const s = submitted(dir) as ReplySubmission | undefined;
   let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
   if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
