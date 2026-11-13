@@ -12,5 +12,7 @@ data:
   SEIDROID_WORKFLOW: {{ .workflow | quote }}
   SEIDROID_TRUNK: {{ .trunk | quote }}
   SEIDROID_CHECK_NAME: {{ .checkName | quote }}
-  SEIDROID_AUDIENCE: {{ .audience | quote }}
+  {{- end }}
+  {{- with .Values.config.audience | default (and .Values.httpRoute.hostnames (printf "https://%s" (first .Values.httpRoute.hostnames))) }}
+  SEIDROID_AUDIENCE: {{ . | quote }}
   {{- end }}

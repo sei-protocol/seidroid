@@ -43,8 +43,6 @@ export interface Gate {
 
 export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }>;
 
-/** The audience of the OIDC tokens the job shows the seidroid service. */
-const AUDIENCE = "seidroid";
 const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 
 /** commands are a comment's lines, normalised for matching a command: whitespace collapsed, lower case, no leading @. */
@@ -165,11 +163,11 @@ async function oidc(audience: string): Promise<string> {
   return ((await res.json()) as { value: string }).value;
 }
 
-/** service calls a seidroid service route under a fresh OIDC token and returns its answer. */
-async function service(url: string, route: string, body: unknown): Promise<any> {
+/** service calls a seidroid service route under a fresh OIDC token issued for the service's origin, and returns its answer. */
+export async function service(url: string, route: string, body: unknown): Promise<any> {
   const res = await fetch(new URL(route, url), {
     method: "POST",
-    headers: { Authorization: `Bearer ${await oidc(AUDIENCE)}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${await oidc(new URL(url).origin)}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(120_000),
   });

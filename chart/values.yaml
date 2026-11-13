@@ -32,8 +32,9 @@ config:
   workflow: sei-protocol/seidroid/.github/workflows/review.yml
   trunk: main
   checkName: Seidroid Review
-  # The audience a caller's OIDC token must be issued for.
-  audience: seidroid
+  # The audience a caller's OIDC token must be issued for: the origin callers
+  # reach the service at. Defaults to https:// and the first httpRoute hostname.
+  audience: ""
 
 # More ConfigMaps or Secrets to load settings from, as container envFrom
 # entries. The chart's own settings win over the same key in one of these.
