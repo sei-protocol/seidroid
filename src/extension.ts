@@ -64,7 +64,7 @@ export default function seidroid(pi: ExtensionAPI): void {
   });
 
   if (home) {
-    const jail = { work: path.join(root, TREE), home, path: process.env.PATH ?? "/usr/bin:/bin" };
+    const jail = { work: path.join(root, TREE), readOnly: root, home, path: process.env.PATH ?? "/usr/bin:/bin" };
     pi.registerTool(
       createBashToolDefinition(root, {
         exposeSessionEnvironment: false,

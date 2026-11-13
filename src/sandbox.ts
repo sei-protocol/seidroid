@@ -7,6 +7,8 @@ const HIDDEN = ["/tmp", "/home", "/root", "/run", "/mnt"];
 export interface Jail {
   /** work is the directory the command may change, besides home. */
   work: string;
+  /** readOnly is a directory around work the command may read but not change. */
+  readOnly?: string;
   home: string;
   path: string;
   /** net shares the runner's network, for fetching dependencies before the review. */
@@ -15,8 +17,8 @@ export interface Jail {
 
 /**
  * bwrapArgs confines a command with bubblewrap: the machine read-only, its runtime and homes
- * hidden, only work, home and a fresh /tmp writable, no other process visible, an empty
- * environment, and no network unless net is set.
+ * hidden except readOnly, only work, home and a fresh /tmp writable, no other process
+ * visible, an empty environment, and no network unless net is set.
  */
 export function bwrapArgs(j: Jail, cwd = j.work): string[] {
   return [
@@ -24,6 +26,7 @@ export function bwrapArgs(j: Jail, cwd = j.work): string[] {
     "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
     ...HIDDEN.filter((d) => existsSync(d)).flatMap((d) => ["--tmpfs", d]),
     ...(j.net ? ["--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"] : []),
+    ...(j.readOnly ? ["--ro-bind", j.readOnly, j.readOnly] : []),
     "--bind", j.home, j.home, "--bind", j.work, j.work, "--chdir", cwd,
     "--clearenv", "--setenv", "PATH", j.path, "--setenv", "HOME", j.home, "--setenv", "TMPDIR", "/tmp", "--setenv", "LANG", "C.UTF-8",
   ];
