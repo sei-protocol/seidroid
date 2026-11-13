@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { followUpPrompt, location, reviewPrompt, type Request } from "../src/prompt.ts";
+import { replyPrompt } from "../src/reply.ts";
 
 const req = (over: Partial<Request> = {}): Request => ({
   repo: "sei-protocol/sei-chain",
@@ -70,4 +71,10 @@ test("followUpPrompt carries the open threads and asks for one submission", () =
   assert.match(p, /tree\/a\.go:3 \[thread_id: PRRT_a\]/);
   assert.match(p, /reply: done/);
   assert.match(p, /calling submit_review once/);
+});
+
+test("replyPrompt offers the shell only when the reply has one", () => {
+  const r = { repo: "sei-protocol/sei-chain", pr: 7, diffLines: 3 };
+  assert.doesNotMatch(replyPrompt(r), /You also have bash/);
+  assert.match(replyPrompt({ ...r, hasShell: true }), /You also have bash[\s\S]*thrown away after this reply/);
 });

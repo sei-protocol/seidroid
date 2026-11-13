@@ -15,6 +15,8 @@ export interface ReplyRequest {
   repo: string;
   pr: number;
   diffLines: number;
+  /** hasShell is set when the reply has a sandboxed bash to build and test the tree with. */
+  hasShell?: boolean;
   extraInstructions?: string;
 }
 
@@ -22,5 +24,6 @@ export interface ReplyRequest {
 export function replyPrompt(req: ReplyRequest): string {
   const text = (req.extraInstructions ?? "").trim();
   const extra = text ? prose("reply-extra", { text: text.slice(0, MAX_EXTRA_INSTRUCTIONS) }) : "";
-  return prose("reply", { repo: req.repo, pr: req.pr, question: QUESTION, diff: DIFF, lines: req.diffLines, tree: TREE, intent: INTENT, extra });
+  const shell = req.hasShell ? prose("reply-shell", { tree: TREE }) : "";
+  return prose("reply", { repo: req.repo, pr: req.pr, question: QUESTION, diff: DIFF, lines: req.diffLines, tree: TREE, intent: INTENT, shell, extra });
 }
