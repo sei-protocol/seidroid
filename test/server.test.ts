@@ -7,7 +7,7 @@ import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
 import { handler, type Config } from "../src/server.ts";
 
-const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "seidroid review v2" };
+const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
 const HEAD = "b".repeat(40);
 const claims = (over: Partial<Claims> = {}): Claims => ({
   repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol", job_workflow_ref: `${cfg.workflow}@${"a".repeat(40)}`, job_workflow_sha: "a".repeat(40),
@@ -55,12 +55,16 @@ test("publish rebuilds the verdict from the base commit and publishes as the run
     const [{ target, outcome }] = s.published as [{ target: Target; outcome: any }];
     assert.equal(target.runUrl, "https://github.com/sei-protocol/sei-chain/actions/runs/9/attempts/2");
     assert.equal(target.shadow, true);
+    assert.equal(target.aiReviewCheck, false);
     assert.equal(target.approve, false);
     assert.deepEqual(outcome.verdict.accepted, ["the legacy store keeps its lock"]);
     assert.equal(outcome.verdict.settledBy, "codex scout");
 
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: { decision: "lgtm" } } });
     assert.match((s.published[1]!.outcome as { failure: string }).failure, /broke the contract/);
+
+    for (const shadow of [false, true, undefined]) await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, shadow, aiReviewCheck: true });
+    assert.deepEqual(s.published.slice(2).map((p) => p.target.aiReviewCheck), [true, false, false]);
 
     const own = { [`GET ${repo}/contents/docs/review.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- docs may lag\n").toString("base64") }) };
     const elsewhere = await serve({ ...base, ...own });

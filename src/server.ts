@@ -211,7 +211,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (cmp.data?.status !== "ahead") throw new HttpError(409, `${body.head} is not on pull request ${pr}`);
       }
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, approve: body.approve === true };
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, aiReviewCheck: body.shadow === false && body.aiReviewCheck === true, approve: body.approve === true };
       return deps.publish(gh, target, await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines)));
     },
   };
@@ -298,7 +298,7 @@ if (import.meta.main) {
     trunk: env("SEIDROID_TRUNK", "main"),
     team: env("SEIDROID_TEAM"),
     bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
-    checkName: env("SEIDROID_CHECK_NAME", "seidroid review v2"),
+    checkName: env("SEIDROID_CHECK_NAME", "Seidroid Review"),
   };
   const audience = env("SEIDROID_AUDIENCE", "seidroid");
   const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish });

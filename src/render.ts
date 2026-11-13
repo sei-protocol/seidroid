@@ -146,7 +146,7 @@ export function fit(body: string, max = MAX_BODY): string {
 /** summaryComment is the review's body as posted: marker, prose, and how the review was decided. */
 export function summaryComment(v: Verdict, includeNits: boolean, runUrl: string, unplaced: readonly Finding[] = []): string {
   const how = v.settledBy ? `settled by ${v.settledBy} with no review turn` : `the review wrote ${code(v.submission.decision)}`;
-  return `${MARKER.verdict}\n${fit(reviewBody(v, includeNits, unplaced))}\n\n<sub>seidroid review v2 · ${how} · [run](${runUrl})</sub>`;
+  return `${MARKER.verdict}\n${fit(reviewBody(v, includeNits, unplaced))}\n\n<sub>Seidroid Review · ${how} · [run](${runUrl})</sub>`;
 }
 
 /** findingComment is an inline finding's body; cited marks one that fell back to the whole file. */

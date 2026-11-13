@@ -31,7 +31,7 @@ config:
   # its commit must be on.
   workflow: sei-protocol/seidroid/.github/workflows/review.yml
   trunk: main
-  checkName: seidroid review v2
+  checkName: Seidroid Review
   # The audience a caller's OIDC token must be issued for.
   audience: seidroid
 
