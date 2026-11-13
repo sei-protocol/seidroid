@@ -166,7 +166,8 @@
           "$ref": "#/definitions/name"
         },
         "audience": {
-          "$ref": "#/definitions/name"
+          "type": "string",
+          "pattern": "^(https?://[^/]+)?$"
         }
       }
     },

@@ -319,7 +319,8 @@ if (import.meta.main) {
     bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
     checkName: env("SEIDROID_CHECK_NAME", "Seidroid Review"),
   };
-  const audience = env("SEIDROID_AUDIENCE", "seidroid");
+  const audience = env("SEIDROID_AUDIENCE");
+  if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
   const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }

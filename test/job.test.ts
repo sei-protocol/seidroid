@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { changedLines, conversation, guard, priorThreads, requested, type Event, type GuardOptions } from "../src/job.ts";
+import { changedLines, conversation, guard, priorThreads, requested, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { guidelinesPath } from "../src/text.ts";
 
@@ -162,4 +164,24 @@ test("guidelinesPath keeps a plain path inside the repository and reads REVIEW.m
     ["docs/review.md", "", undefined, "/etc/passwd", "a/../b.md", "..", "a b.md", "x;rm"].map(guidelinesPath),
     ["docs/review.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md"],
   );
+});
+
+test("service shows each service a token issued for that service's origin", async (t) => {
+  const audiences: string[] = [];
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url!, "http://x");
+    if (url.pathname === "/token") audiences.push(url.searchParams.get("audience")!);
+    res.setHeader("Content-Type", "application/json").end(url.pathname === "/token" ? '{"value":"t"}' : "{}");
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => srv.close());
+  const origin = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  Object.assign(process.env, { ACTIONS_ID_TOKEN_REQUEST_URL: `${origin}/token?x=1`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer" });
+  t.after(() => {
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  });
+  await service(`${origin}/base/`, "/allow", {});
+  await service(origin, "/allow", {});
+  assert.deepEqual(audiences, [origin, origin]);
 });
