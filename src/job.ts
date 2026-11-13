@@ -339,7 +339,8 @@ async function review(o: Record<string, string>): Promise<void> {
       return readingOf(model, (submitted(dir) as any) ?? failed(dir));
     }),
   );
-  const settled = settleByScouts(scouts, diffLines);
+  // A request with text of its own goes to the review, the only role that reads it.
+  const settled = o.ask ? undefined : settleByScouts(scouts, diffLines);
   const includeNits = pull.labels.some((l: { name: string }) => l.name === o["nitpick-label"]);
   let outcome: unknown;
   if (settled) {
