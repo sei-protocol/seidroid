@@ -104,7 +104,7 @@ jobs:
     if: >-
       github.event_name == 'pull_request' ||
       contains(github.event.comment.body || github.event.review.body, inputs.trigger-phrase) ||
-      contains(github.event.comment.body || github.event.review.body, ' review')
+      contains(github.event.comment.body || github.event.review.body, 'review')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
