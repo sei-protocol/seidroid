@@ -7,7 +7,7 @@ import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
 import { handler, type Config } from "../src/server.ts";
 
-const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "seidroid review v2" };
+const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
 const HEAD = "b".repeat(40);
 const claims = (over: Partial<Claims> = {}): Claims => ({
   repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol", job_workflow_ref: `${cfg.workflow}@${"a".repeat(40)}`, job_workflow_sha: "a".repeat(40),

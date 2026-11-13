@@ -5,7 +5,7 @@ import { publish, type Target } from "../src/publish.ts";
 import { MARKER } from "../src/render.ts";
 import { parseSubmission, verdictOf, type Verdict } from "../src/verdict.ts";
 
-const T: Target = { owner: "o", repo: "r", pr: 7, head: "abc", bot: "seidroid[bot]", runUrl: "https://run/1", checkName: "seidroid review v2", includeNits: false, shadow: false, aiReviewCheck: false };
+const T: Target = { owner: "o", repo: "r", pr: 7, head: "abc", bot: "seidroid[bot]", runUrl: "https://run/1", checkName: "Seidroid Review", includeNits: false, shadow: false, aiReviewCheck: false };
 const patch = "@@ -1,2 +1,3 @@\n a\n+b\n c";
 
 type Route = (body: any) => Response;
@@ -162,12 +162,12 @@ test("publish copies the check run as AI Review when asked, and survives the cop
   const names = (of: (k: string) => any[]) => of("POST /repos/o/r/check-runs").map((c) => `${c.name}: ${c.conclusion}`);
   const plain = fake({});
   await publish(plain.gh, T, { verdict: verdict({}) });
-  assert.deepEqual(names(plain.of), ["seidroid review v2: success"]);
+  assert.deepEqual(names(plain.of), ["Seidroid Review: success"]);
 
   const copied = fake({ "POST /repos/o/r/issues/7/comments": () => ({ status: 201, data: {} }) });
   await publish(copied.gh, { ...T, aiReviewCheck: true }, { verdict: verdict({}) });
   await publish(copied.gh, { ...T, aiReviewCheck: true }, { failure: "pi exited with 1" });
-  assert.deepEqual(names(copied.of), ["seidroid review v2: success", "AI Review: success", "seidroid review v2: failure", "AI Review: failure"]);
+  assert.deepEqual(names(copied.of), ["Seidroid Review: success", "AI Review: success", "Seidroid Review: failure", "AI Review: failure"]);
 
   const refused = fake({ "POST /repos/o/r/check-runs": (b) => ({ status: b.name === "AI Review" ? 403 : 201, data: {} }) });
   assert.equal((await publish(refused.gh, { ...T, aiReviewCheck: true }, { verdict: verdict({}) })).conclusion, "success");

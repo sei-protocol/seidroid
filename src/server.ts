@@ -298,7 +298,7 @@ if (import.meta.main) {
     trunk: env("SEIDROID_TRUNK", "main"),
     team: env("SEIDROID_TEAM"),
     bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
-    checkName: env("SEIDROID_CHECK_NAME", "seidroid review v2"),
+    checkName: env("SEIDROID_CHECK_NAME", "Seidroid Review"),
   };
   const audience = env("SEIDROID_AUDIENCE", "seidroid");
   const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish });
