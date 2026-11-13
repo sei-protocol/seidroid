@@ -16,7 +16,7 @@ spec:
     {{- toYaml .Values.httpRoute.hostnames | nindent 4 }}
   rules:
     - matches:
-        {{- range list "/healthz" "/allow" "/publish" "/reply" }}
+        {{- range list "/healthz" "/allow" "/publish" "/react" "/reply" }}
         - path:
             type: Exact
             value: {{ . }}
