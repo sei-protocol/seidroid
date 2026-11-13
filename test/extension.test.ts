@@ -64,7 +64,8 @@ test("with a home, bash is offered and runs in the sandbox", async () => {
   assert.equal(await gate!({ toolName: "bash", input: { command: "env" } }), undefined);
   assert.ok(await gate!({ toolName: "write", input: { path: "x" } }));
   if (!canSandbox()) return;
-  const r = await tools[0].execute("1", { command: "env; echo home=$HOME" }, undefined, undefined, {});
+  const r = await tools[0].execute("1", { command: "env; echo home=$HOME; echo forged > pr.diff" }, undefined, undefined, {});
+  assert.equal(readFileSync(path.join(root, "pr.diff"), "utf8"), "diff");
   const text = r.content.map((c) => c.text).join("");
   assert.match(text, new RegExp(`home=${home}`));
   assert.doesNotMatch(text, /SEIDROID_PROBE|SEIDROID_OUT/);

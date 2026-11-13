@@ -263,10 +263,10 @@ function shellHome(o: Record<string, string>, work: string): string | undefined 
   }
   mkdirSync(o.home, { recursive: true });
   if (o.prepare) {
-    const jail = { work, home: o.home, path: process.env.PATH ?? "/usr/bin:/bin", net: true };
+    const jail = { work: path.join(work, TREE), home: o.home, path: process.env.PATH ?? "/usr/bin:/bin", net: true };
     const stop = randomUUID();
     console.log(`::stop-commands::${stop}`);
-    const r = spawnSync("bwrap", [...bwrapArgs(jail, path.join(work, TREE)), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS, env: { PATH: jail.path } });
+    const r = spawnSync("bwrap", [...bwrapArgs(jail), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS, env: { PATH: jail.path } });
     console.log(`::${stop}::`);
     if (r.status !== 0) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the review's shell may lack what the tree needs`);
   }

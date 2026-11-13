@@ -1,6 +1,7 @@
 import { realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { TREE } from "./prompt.ts";
 import { ReplySubmission } from "./reply.ts";
 import { sandboxed } from "./sandbox.ts";
 import { ScoutSubmission } from "./scout.ts";
@@ -63,7 +64,7 @@ export default function seidroid(pi: ExtensionAPI): void {
   });
 
   if (home) {
-    const jail = { work: root, home, path: process.env.PATH ?? "/usr/bin:/bin" };
+    const jail = { work: path.join(root, TREE), home, path: process.env.PATH ?? "/usr/bin:/bin" };
     pi.registerTool(
       createBashToolDefinition(root, {
         exposeSessionEnvironment: false,
