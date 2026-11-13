@@ -206,33 +206,67 @@ function lay(work: string, pull: any): { diffLines: number; hasStandards: boolea
 
 const MAX_SAID = 8_000;
 const MAX_THREAD = 20;
+const MAX_EARLIER = 30;
+const MAX_EARLIER_SAID = 2_000;
 
 interface Said {
   id: number;
   in_reply_to_id?: number;
-  user: { login: string };
+  user: { login: string } | null;
   body?: string | null;
   path?: string;
   line?: number | null;
   original_line?: number | null;
   diff_hunk?: string;
+  created_at?: string;
+  submitted_at?: string;
 }
 
-/** conversation is the comment event's comment as the reply prompt shows it, after the review thread it ends when it has one. */
+const who = (c: Said): string => c.user?.login ?? "ghost";
+const said = (c: Said, max = MAX_SAID): string => `**${who(c)}:**\n\n${clip(c.body ?? "", max)}\n`;
+
+/**
+ * earlier is the pull request's conversation before at, oldest first and only the latest
+ * MAX_EARLIER of it: comments, review bodies and comments on the code, less those skip names.
+ */
+async function earlier(gh: GitHub, base: string, pr: number, at: string, code: Said[], skip: (c: Said) => boolean): Promise<string[]> {
+  const [comments, reviews] = await Promise.all([all<Said>(gh, `${base}/issues/${pr}/comments`), all<Said>(gh, `${base}/pulls/${pr}/reviews`)]);
+  const talk = [
+    ...comments.map((c) => ({ at: c.created_at, text: said(c, MAX_EARLIER_SAID), c })),
+    ...reviews.filter((r) => r.body).map((r) => ({ at: r.submitted_at, text: said(r, MAX_EARLIER_SAID), c: r })),
+    ...code.map((c) => ({ at: c.created_at, text: `**${who(c)}** on ${c.path}, line ${c.line ?? c.original_line}:\n\n${clip(c.body ?? "", MAX_EARLIER_SAID)}\n`, c })),
+  ].filter((t) => t.at !== undefined && t.at < at && !skip(t.c));
+  talk.sort((a, b) => a.at!.localeCompare(b.at!));
+  const shown = talk.slice(-MAX_EARLIER).map((t) => t.text);
+  if (shown.length === 0) return [];
+  const dropped = talk.length - shown.length;
+  return ["# The conversation so far", "", ...(dropped > 0 ? [`(${dropped} earlier comments are not shown.)`, ""] : []), ...shown, ""];
+}
+
+/**
+ * conversation is what the reply needs to read: the pull request's conversation so far, then
+ * the comment to answer, with the review thread it ends when it was left on the code.
+ */
 export async function conversation(gh: GitHub, base: string, pr: number, event: string, id: number): Promise<string> {
-  const said = (c: Said) => `**${c.user.login}:**\n\n${clip(c.body ?? "", MAX_SAID)}\n`;
+  const code = await all<Said>(gh, `${base}/pulls/${pr}/comments`);
   if (event === "pull_request_review_comment") {
-    const comments = await all<Said>(gh, `${base}/pulls/${pr}/comments`);
-    const root = comments.find((c) => c.id === id)?.in_reply_to_id ?? id;
-    const thread = comments.filter((c) => (c.id === root || c.in_reply_to_id === root) && c.id <= id);
+    const root = code.find((c) => c.id === id)?.in_reply_to_id ?? id;
+    const whole = new Set(code.filter((c) => c.id === root || c.in_reply_to_id === root));
+    const thread = [...whole].filter((c) => c.id <= id);
     const top = thread[0];
-    if (top?.id !== root || thread.at(-1)!.id !== id) throw new Error(`comment ${id} is not on pull request ${pr}`);
+    const asked = thread.at(-1);
+    if (top?.id !== root || asked?.id !== id) throw new Error(`comment ${id} is not on pull request ${pr}`);
     const where = `${top.path}, line ${top.line ?? top.original_line}`;
-    return [`# A review thread on ${where}`, "", "````diff", clip(top.diff_hunk ?? "", MAX_SAID), "````", "", ...thread.slice(-MAX_THREAD).map(said)].join("\n");
+    return [
+      ...(await earlier(gh, base, pr, asked.created_at ?? "", code, (c) => whole.has(c))),
+      `# A review thread on ${where}`, "", "````diff", clip(top.diff_hunk ?? "", MAX_SAID), "````", "", ...thread.slice(-MAX_THREAD).map((c) => said(c)),
+    ].join("\n");
   }
-  const got = await gh.rest<Said>("GET", event === "issue_comment" ? `${base}/issues/comments/${id}` : `${base}/pulls/${pr}/reviews/${id}`);
+  const review = event !== "issue_comment";
+  const got = await gh.rest<Said>("GET", review ? `${base}/pulls/${pr}/reviews/${id}` : `${base}/issues/comments/${id}`);
   if (got.status !== 200) throw new Error(`could not read comment ${id}: ${got.status}`);
-  return ["# A comment on the pull request", "", said(got.data)].join("\n");
+  const at = (review ? got.data.submitted_at : got.data.created_at) ?? "";
+  return [...(await earlier(gh, base, pr, at, code, () => false)), "# The comment to answer", "", said(got.data)].join("\n");
 }
 
 const lines = (s: string): string[] => s.split(/[\s,]+/).filter((x) => x !== "");
