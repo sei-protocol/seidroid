@@ -44,6 +44,7 @@ export function tally(stats: Stats, record: string): void {
     toolName?: string;
     args?: { command?: unknown };
     isError?: boolean;
+    durationMs?: number;
     message?: { role?: string; usage?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite", number>> & { cost?: { total?: number } }; stopReason?: string; errorMessage?: string };
   };
   try {
@@ -55,8 +56,10 @@ export function tally(stats: Stats, record: string): void {
     stats.commands.push({ id: String(event.toolCallId), command: String(event.args?.command ?? "").slice(0, MAX_COMMAND_CHARS) });
   }
   if (event.toolName === "bash" && event.type === "tool_execution_end") {
-    const c = stats.commands.find((c) => c.id === String(event.toolCallId));
-    if (c) c.failed = event.isError === true;
+    const i = stats.commands.findIndex((c) => c.id === String(event.toolCallId));
+    // pi reports no duration for a call it refused before running it.
+    if (i >= 0 && event.durationMs === undefined) stats.commands.splice(i, 1);
+    else if (i >= 0) stats.commands[i]!.failed = event.isError === true;
   }
   const m = event.message;
   if (event.type !== "message_end" || m?.role !== "assistant") return;
