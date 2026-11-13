@@ -5,7 +5,7 @@ import { publish, type Target } from "../src/publish.ts";
 import { MARKER } from "../src/render.ts";
 import { parseSubmission, verdictOf, type Verdict } from "../src/verdict.ts";
 
-const T: Target = { owner: "o", repo: "r", pr: 7, head: "abc", bot: "seidroid[bot]", runUrl: "https://run/1", checkName: "seidroid review v2", includeNits: false, shadow: false };
+const T: Target = { owner: "o", repo: "r", pr: 7, head: "abc", bot: "seidroid[bot]", runUrl: "https://run/1", checkName: "seidroid review v2", includeNits: false, shadow: false, approve: true };
 const patch = "@@ -1,2 +1,3 @@\n a\n+b\n c";
 
 type Route = (body: any) => Response;
@@ -165,4 +165,15 @@ test("publish in shadow mode posts only the check run", async () => {
   assert.match(calls.find((c) => c.key === "POST /repos/o/r/check-runs")!.body.output.summary, /`a.go:2` — b panics/);
   await publish(gh, { ...T, shadow: true }, { failure: "pi exited with 1" });
   assert.equal(calls.filter((c) => c.key === "POST /repos/o/r/issues/7/comments").length, 0);
+});
+
+test("publish only comments on a clean review unless it may approve, and still requests changes", async () => {
+  const events = async (approve: boolean, raw: object) => {
+    const { gh, of } = fake({});
+    await publish(gh, { ...T, approve }, { verdict: verdict(raw) });
+    return of("POST /repos/o/r/pulls/7/reviews").map((r: any) => r.event);
+  };
+  assert.deepEqual(await events(false, {}), ["COMMENT"]);
+  assert.deepEqual(await events(true, {}), ["APPROVE"]);
+  assert.deepEqual(await events(false, { inline_comments: [comment()] }), ["REQUEST_CHANGES"]);
 });

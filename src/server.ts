@@ -7,7 +7,7 @@ import { parseAccepted } from "./accepted.ts";
 import { publish, type Outcome } from "./publish.ts";
 import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
-import { clip, oneLine } from "./text.ts";
+import { clip, guidelinesPath, oneLine } from "./text.ts";
 import { parseSubmission, verdictOf } from "./verdict.ts";
 
 export interface Config {
@@ -211,8 +211,8 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (cmp.data?.status !== "ahead") throw new HttpError(409, `${body.head} is not on pull request ${pr}`);
       }
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false };
-      return deps.publish(gh, target, await outcomeOf(gh, base, pull.base.sha, body.outcome));
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, approve: body.approve === true };
+      return deps.publish(gh, target, await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines)));
     },
   };
 
@@ -242,15 +242,15 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   };
 }
 
-/** outcomeOf rebuilds the verdict on the service's side: the contract is checked again and Accepted conditions come from the base commit. */
-async function outcomeOf(gh: GitHub, base: string, baseSha: string, raw: any): Promise<Outcome> {
+/** outcomeOf rebuilds the verdict on the service's side: the contract is checked again and Accepted conditions come from the guidelines file at the base commit. */
+async function outcomeOf(gh: GitHub, base: string, baseSha: string, raw: any, guidelines: string): Promise<Outcome> {
   if (typeof raw?.failure === "string") return { failure: clip(oneLine(raw.failure), 500) || "the run gave no reason" };
   const parsed = parseSubmission(raw?.submission);
   if (!parsed.ok) return { failure: `the review's submission broke the contract: ${parsed.reason}` };
-  const md = await gh.rest<{ content: string }>("GET", `${base}/contents/REVIEW.md?ref=${baseSha}`);
-  if (md.status !== 200 && md.status !== 404) throw new Error(`could not read REVIEW.md: ${md.status}`);
+  const md = await gh.rest<{ content: string }>("GET", `${base}/contents/${guidelines}?ref=${baseSha}`);
+  if (md.status !== 200 && md.status !== 404) throw new Error(`could not read ${guidelines}: ${md.status}`);
   const accepted = md.status === 200 ? parseAccepted(Buffer.from(md.data.content, "base64").toString("utf8")) : [];
-  const v = verdictOf(parsed.submission, accepted, accepted.length ? `REVIEW.md@${baseSha.slice(0, 12)}` : "");
+  const v = verdictOf(parsed.submission, accepted, accepted.length ? `${guidelines}@${baseSha.slice(0, 12)}` : "");
   v.settledBy = typeof raw.settledBy === "string" ? clip(oneLine(raw.settledBy), 80) : "";
   return { verdict: v };
 }

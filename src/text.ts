@@ -10,5 +10,9 @@ export function clip(s: string, max: number): string {
   return bytes.subarray(0, end).toString("utf8") + "…";
 }
 
+/** guidelinesPath is name when it is a plain path inside the repository, and REVIEW.md otherwise. */
+export const guidelinesPath = (name: string | undefined): string =>
+  name && !name.startsWith("/") && !name.split("/").includes("..") && /^[A-Za-z0-9._/-]+$/.test(name) ? name : "REVIEW.md";
+
 /** byteLength is the length of s in UTF-8 bytes, the unit every budget here counts in. */
 export const byteLength = (s: string): number => Buffer.byteLength(s, "utf8");
