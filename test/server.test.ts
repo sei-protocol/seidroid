@@ -55,11 +55,24 @@ test("publish rebuilds the verdict from the base commit and publishes as the run
     const [{ target, outcome }] = s.published as [{ target: Target; outcome: any }];
     assert.equal(target.runUrl, "https://github.com/sei-protocol/sei-chain/actions/runs/9/attempts/2");
     assert.equal(target.shadow, true);
+    assert.equal(target.approve, false);
     assert.deepEqual(outcome.verdict.accepted, ["the legacy store keeps its lock"]);
     assert.equal(outcome.verdict.settledBy, "codex scout");
 
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: { decision: "lgtm" } } });
     assert.match((s.published[1]!.outcome as { failure: string }).failure, /broke the contract/);
+
+    const own = { [`GET ${repo}/contents/docs/review.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- docs may lag\n").toString("base64") }) };
+    const elsewhere = await serve({ ...base, ...own });
+    try {
+      await elsewhere.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true, guidelines: "docs/review.md" });
+      await elsewhere.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, guidelines: "../secrets" });
+      const [first, second] = elsewhere.published as { target: Target; outcome: any }[];
+      assert.equal(first!.target.approve, true);
+      assert.deepEqual([first!.outcome.verdict.accepted, second!.outcome.verdict.accepted], [["docs may lag"], ["the legacy store keeps its lock"]]);
+    } finally {
+      elsewhere.close();
+    }
 
     const asked = claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "dependabot[bot]" });
     assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, asked)).status, 200);
