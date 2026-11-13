@@ -240,7 +240,7 @@ jobs:
           node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
           --ai-review-check "$AI_REVIEW_CHECK" --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
-          --nitpick-label "$NITPICK" --extra-instructions "$EXTRA" --ask "$ASK"
+          --nitpick-label "$NITPICK" --extra-instructions="$EXTRA" --ask="$ASK"
           --home "$RUNNER_TEMP/seidroid-home" --prepare "$PREPARE"
           --approve-on-success "$APPROVE" --guidelines-file "$GUIDELINES"
           --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"
@@ -322,7 +322,7 @@ jobs:
         run: >-
           node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT"
           --work reply --out "$RUNNER_TEMP/seidroid-out" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
-          --extra-instructions "$EXTRA" --timeout-seconds 600
+          --extra-instructions="$EXTRA" --timeout-seconds 600
       - name: Take the eyes back
         if: always() && github.event_name != 'pull_request_review'
         env:
