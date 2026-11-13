@@ -27,17 +27,39 @@ export interface Stats {
   cacheWrite: number;
   cost: number;
   error: string;
+  /** commands are the shell commands the model ran, in order, with whether each failed. */
+  commands: { id: string; command: string; failed?: boolean }[];
 }
 
-export const emptyStats = (): Stats => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, error: "" });
+export const emptyStats = (): Stats => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, error: "", commands: [] });
 
-/** tally folds one JSONL event from pi into stats, counting each finished assistant message once. */
+const MAX_COMMANDS = 200;
+const MAX_COMMAND_CHARS = 1000;
+
+/** tally folds one JSONL event from pi into stats, counting each finished assistant message once and noting each shell command. */
 export function tally(stats: Stats, record: string): void {
-  let event: { type?: string; message?: { role?: string; usage?: Partial<Record<keyof Stats, number>> & { cost?: { total?: number } }; stopReason?: string; errorMessage?: string } };
+  let event: {
+    type?: string;
+    toolCallId?: string;
+    toolName?: string;
+    args?: { command?: unknown };
+    isError?: boolean;
+    durationMs?: number;
+    message?: { role?: string; usage?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite", number>> & { cost?: { total?: number } }; stopReason?: string; errorMessage?: string };
+  };
   try {
     event = JSON.parse(record);
   } catch {
     return;
+  }
+  if (event.toolName === "bash" && event.type === "tool_execution_start" && stats.commands.length < MAX_COMMANDS) {
+    stats.commands.push({ id: String(event.toolCallId), command: String(event.args?.command ?? "").slice(0, MAX_COMMAND_CHARS) });
+  }
+  if (event.toolName === "bash" && event.type === "tool_execution_end") {
+    const i = stats.commands.findIndex((c) => c.id === String(event.toolCallId));
+    // pi reports no duration for a call it refused before running it.
+    if (i >= 0 && event.durationMs === undefined) stats.commands.splice(i, 1);
+    else if (i >= 0) stats.commands[i]!.failed = event.isError === true;
   }
   const m = event.message;
   if (event.type !== "message_end" || m?.role !== "assistant") return;
