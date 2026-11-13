@@ -37,6 +37,8 @@ export interface Request {
   hasShell?: boolean;
   includeNits: boolean;
   extraInstructions?: string;
+  /** ask is what the person who asked for this review added to the request. */
+  ask?: string;
   scouts: readonly ScoutReading[];
   threads: readonly PriorThread[];
 }
@@ -74,6 +76,12 @@ function extraInstructionsStep(req: Request): string[] {
   return block("extra", { text: clip(text, MAX_EXTRA_INSTRUCTIONS) });
 }
 
+function askStep(req: Request): string[] {
+  const text = (req.ask ?? "").trim();
+  if (text === "") return [];
+  return block("ask", { text: clip(text, MAX_EXTRA_INSTRUCTIONS) });
+}
+
 function reconcileStep(req: Request): string[] {
   if (req.scouts.length === 0) return [];
   const readings = req.scouts.flatMap((s) => {
@@ -103,6 +111,7 @@ export function reviewPrompt(req: Request): string {
     ...readStep(req),
     ...repoContextStep(req),
     ...extraInstructionsStep(req),
+    ...askStep(req),
     ...historyStep(req.threads, location),
     ...block("checklist"),
     ...reconcileStep(req),
@@ -118,6 +127,7 @@ export function followUpPrompt(req: Request): string {
     ...readStep(req),
     ...repoContextStep(req),
     ...extraInstructionsStep(req),
+    ...askStep(req),
     ...openThreadsStep(req.threads, location),
     ...threadUpdateStep(req.threads, location),
     ...block("follow-up-review"),

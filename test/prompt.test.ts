@@ -38,6 +38,11 @@ test("extra instructions are trimmed, clipped and omitted when blank", () => {
   assert.ok(p.includes("x".repeat(4000) + "…"));
 });
 
+test("the asker's text is its own block, omitted when blank", () => {
+  assert.doesNotMatch(reviewPrompt(req({ ask: "  " })), /asked for this review added/);
+  assert.match(reviewPrompt(req({ ask: "Run go test ./x/" })), /asked for this review added the following[\s\S]*Run go test \.\/x\//);
+});
+
 test("scout readings are reconciled, located and contained", () => {
   const p = reviewPrompt(
     req({

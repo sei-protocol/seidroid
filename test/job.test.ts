@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { changedLines, conversation, guard, priorThreads, requested, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, guard, priorThreads, requested, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { guidelinesPath } from "../src/text.ts";
 
@@ -62,6 +62,15 @@ test("guard admits what v1 admits and nothing more", async () => {
     assert.match(gate.reason, reason, name);
     assert.equal(gate.head, run ? "h" : "", name);
   }
+  const asked = await guard(ask("@seidroid review\nRun go test ./x/"), opts, gh(), team);
+  assert.equal(asked.ask, "Run go test ./x/");
+  assert.equal((await guard(ask("@seidroid review\nrun it", "renovate[bot]", "Bot"), opts, gh(), team)).ask, "");
+});
+
+test("besides keeps a review request's text without its command lines", () => {
+  assert.equal(besides("Please look at x.\n  @Seidroid REVIEW \nRun go test.\nseidroid review", "@seidroid"), "Please look at x.\nRun go test.");
+  assert.equal(besides("@seidroid review", "@seidroid"), "");
+  assert.equal(besides(`@seidroid review\n${"x".repeat(5000)}`, "@seidroid").length, 4001);
 });
 
 test("guard answers a team member's other mentions, outside shadow and never a bot's", async () => {

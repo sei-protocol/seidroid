@@ -123,6 +123,7 @@ jobs:
       pr: ${{ steps.guard.outputs.pr }}
       head: ${{ steps.guard.outputs.head }}
       comment: ${{ steps.guard.outputs.comment }}
+      ask: ${{ steps.guard.outputs.ask }}
       repo: ${{ steps.self.outputs.repo }}
       sha: ${{ steps.self.outputs.sha }}
     steps:
@@ -230,6 +231,7 @@ jobs:
           THINKING: ${{ inputs.thinking }}
           NITPICK: ${{ inputs.nitpick-label }}
           EXTRA: ${{ inputs.extra-instructions }}
+          ASK: ${{ needs.guard.outputs.ask }}
           PREPARE: ${{ inputs.prepare }}
           APPROVE: ${{ inputs.approve-on-success }}
           GUIDELINES: ${{ inputs.guidelines-file }}
@@ -238,7 +240,7 @@ jobs:
           node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
           --ai-review-check "$AI_REVIEW_CHECK" --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
-          --nitpick-label "$NITPICK" --extra-instructions "$EXTRA"
+          --nitpick-label "$NITPICK" --extra-instructions "$EXTRA" --ask "$ASK"
           --home "$RUNNER_TEMP/seidroid-home" --prepare "$PREPARE"
           --approve-on-success "$APPROVE" --guidelines-file "$GUIDELINES"
           --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"

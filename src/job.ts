@@ -39,6 +39,8 @@ export interface Gate {
   pr: number;
   head: string;
   comment: number;
+  /** ask is what the comment that asked for this review says beside the command. */
+  ask: string;
 }
 
 export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }>;
@@ -53,6 +55,15 @@ const bare = (phrase: string): string => phrase.toLowerCase().replace(/^@/, "");
 
 /** requested reports whether a comment asks for a review: a line holding just the phrase, with or without its @, and "review". */
 export const requested = (body: string, phrase: string): boolean => commands(body).includes(`${bare(phrase)} review`);
+
+const MAX_ASK = 4000;
+
+/** besides is a review request's text without its command lines, trimmed and clipped. */
+export const besides = (body: string, phrase: string): string => {
+  const command = `${bare(phrase)} review`;
+  const lines = commands(body);
+  return clip(body.split("\n").filter((_, i) => lines[i] !== command).join("\n").trim(), MAX_ASK);
+};
 
 /** reserved reports whether a comment holds a review command seidroid v1 handles, such as "review close". */
 const reserved = (body: string, phrase: string): boolean => {
@@ -82,8 +93,8 @@ function commentOf(ev: Event): { pr: number; body: string; id: number; bot: bool
  * earns a reply, outside shadow.
  */
 export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow): Promise<Gate> {
-  const deny = (pr: number, reason: string): Gate => ({ run: false, reply: false, reason, pr, head: "", comment: 0 });
-  const admit = (reason: string): Gate => ({ run: true, reply: false, reason, pr, head: p.head.sha, comment: 0 });
+  const deny = (pr: number, reason: string): Gate => ({ run: false, reply: false, reason, pr, head: "", comment: 0, ask: "" });
+  const admit = (reason: string): Gate => ({ run: true, reply: false, reason, pr, head: p.head.sha, comment: 0, ask: "" });
   const asked = commentOf(ev);
   const question = asked !== undefined && !requested(asked.body, o.phrase);
   let pr: number;
@@ -108,9 +119,9 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   const p = pull.data;
   if (p.state !== "open") return deny(pr, "the pull request is closed");
   if (p.head.repo?.id !== p.base.repo.id) return deny(pr, "the pull request comes from a fork");
-  if (question) return { run: false, reply: true, reason: `${ev.actor} asked seidroid`, pr, head: p.head.sha, comment: asked.id };
+  if (question) return { run: false, reply: true, reason: `${ev.actor} asked seidroid`, pr, head: p.head.sha, comment: asked.id, ask: "" };
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
-  if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id };
+  if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id, ask: asked.bot ? "" : besides(asked.body, o.phrase) };
   if (p.draft) return deny(pr, "the pull request is a draft");
   const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
   const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
@@ -335,7 +346,7 @@ async function review(o: Record<string, string>): Promise<void> {
     outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
   } else {
     const threads = await priorThreads(gh, owner, repo, pr);
-    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, scouts, threads };
+    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
     await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home });
     const s = submitted(dir);
@@ -381,7 +392,7 @@ async function react(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file", "ask",
 ];
 
 async function main(): Promise<void> {
@@ -394,7 +405,8 @@ async function main(): Promise<void> {
   const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]), shadow: o.shadow !== "false" };
   const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }));
   console.log(gate.reason);
-  appendFileSync(process.env.GITHUB_OUTPUT!, `run=${gate.run}\nreply=${gate.reply}\npr=${gate.pr}\nhead=${gate.head}\ncomment=${gate.comment}\n`);
+  const eof = randomUUID();
+  appendFileSync(process.env.GITHUB_OUTPUT!, `run=${gate.run}\nreply=${gate.reply}\npr=${gate.pr}\nhead=${gate.head}\ncomment=${gate.comment}\nask<<${eof}\n${gate.ask}\n${eof}\n`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await main();
