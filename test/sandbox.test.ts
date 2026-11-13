@@ -17,7 +17,7 @@ test("a sandboxed command sees no credential, network, process or file outside i
   const sh = (command: string) =>
     spawnSync("bash", ["-c", sandboxed(command, jail)], { env: { PATH: process.env.PATH, SECRET: "s3cr3t" }, encoding: "utf8" });
 
-  const r = sh(`echo "it's $PWD"; env; awk -F: 'NR>2{print "if"$1}' /proc/net/dev; ls /proc | grep -c '^[0-9]'; touch out "$HOME/cache"; cat ${root}/token; touch /usr/x`);
+  const r = sh(`echo "it's $PWD"; env; tr '\\0' '\\n' </proc/1/environ; awk -F: 'NR>2{print "if"$1}' /proc/net/dev; ls /proc | grep -c '^[0-9]'; touch out "$HOME/cache"; cat ${root}/token; touch /usr/x`);
   assert.match(r.stdout, new RegExp(`^it's ${work}$`, "m"));
   assert.doesNotMatch(r.stdout, /s3cr3t|secret/);
   assert.deepEqual(r.stdout.match(/^if.*$/gm)?.map((l) => l.replace(/\s/g, "")), ["iflo"]);

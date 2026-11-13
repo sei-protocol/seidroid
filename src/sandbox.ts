@@ -31,9 +31,9 @@ export function bwrapArgs(j: Jail, cwd = j.work): string[] {
 
 const quote = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
 
-/** sandboxed is a shell command line that runs command under bwrapArgs. */
+/** sandboxed is a shell command line that runs command under bwrapArgs, starting bwrap with only PATH, as its init keeps the environment it started with. */
 export const sandboxed = (command: string, j: Jail, cwd = j.work): string =>
-  ["exec", "bwrap", ...bwrapArgs(j, cwd), "bash", "-c", command].map((a, i) => (i < 2 ? a : quote(a))).join(" ");
+  ["exec", "env", "-i", `PATH=${j.path}`, "bwrap", ...bwrapArgs(j, cwd), "bash", "-c", command].map((a, i) => (i < 3 ? a : quote(a))).join(" ");
 
 /** canSandbox reports whether bubblewrap can make its namespaces here. */
 export const canSandbox = (): boolean =>
