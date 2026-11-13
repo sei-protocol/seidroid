@@ -80,7 +80,7 @@ const REACTED_AT: Record<string, string> = { issue_comment: "issues", pull_reque
 
 const MAX_REQUEST = 1 << 20;
 const SHA = /^[0-9a-f]{40}$/;
-const CALLER = /^\.github\/workflows\/[\w.-]+\.ya?ml$/;
+const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -124,7 +124,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     const parent = merge?.status === 200 ? merge.data.parents?.[0]?.sha : undefined;
     if (!parent) return false;
     const blob = async (ref: string) => {
-      const r = await gh.rest<{ sha?: string }>("GET", `${base}/contents/${caller}?ref=${ref}`);
+      const r = await gh.rest<{ sha?: string }>("GET", `${base}/contents/${caller.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`);
       return r.status === 200 ? r.data.sha : undefined;
     };
     const [ran, onBase] = await Promise.all([blob(claims.sha), blob(parent)]);

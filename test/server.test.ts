@@ -122,6 +122,17 @@ test("publish refuses tokens and requests it cannot trust", async () => {
   }
 });
 
+test("publish accepts a pull_request run from any unchanged workflow file", async () => {
+  const file = `${repo}/contents/.github/workflows/AI%20Review%20%231.yaml`;
+  const s = await serve({ ...base, [`GET ${file}?ref=${MERGE}`]: ok({ sha: "3".repeat(40) }), [`GET ${file}?ref=${"c".repeat(40)}`]: ok({ sha: "3".repeat(40) }) });
+  try {
+    const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/AI Review #1.yaml@refs/pull/7/merge" }));
+    assert.equal(r.status, 200);
+  } finally {
+    s.close();
+  }
+});
+
 test("publish refuses a pull_request run whose pull request changes its workflow", async () => {
   const caller = `GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`;
   for (const changed of [ok({ sha: "2".repeat(40) }), () => ({ status: 404, data: {} })]) {
