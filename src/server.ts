@@ -183,7 +183,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (cmp.data?.status !== "ahead") throw new HttpError(409, `${body.head} is not on pull request ${pr}`);
       }
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false };
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, aiReviewCheck: body.shadow === false && body.aiReviewCheck === true };
       return deps.publish(gh, target, await outcomeOf(gh, base, pull.base.sha, body.outcome));
     },
   };

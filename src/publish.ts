@@ -18,6 +18,8 @@ export interface Target {
   includeNits: boolean;
   /** Post only the check run, leaving the pull request's conversation alone. */
   shadow: boolean;
+  /** Post the check run a second time as AI Review, the name a branch rule written for v1 requires. */
+  aiReviewCheck: boolean;
 }
 
 export type Outcome = { verdict: Verdict } | { failure: string };
@@ -34,6 +36,7 @@ export interface Report {
 const EVENT = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 const DISMISSAL = "Superseded: the latest review found nothing blocking in this change.";
 const MAX_FILES = 3_000;
+const AI_REVIEW = "AI Review";
 
 /** publish posts a review outcome on the pull request as the App, and reports what landed. */
 export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals: readonly string[] = []): Promise<Report> {
@@ -183,17 +186,19 @@ async function resolveThreads(gh: GitHub, v: Verdict, t: Target, own: Map<string
 }
 
 async function check(gh: GitHub, base: string, t: Target, out: CheckOutput): Promise<void> {
-  await must(
+  const post = (name: string) =>
     gh.rest("POST", `${base}/check-runs`, {
-      name: t.checkName,
+      name,
       head_sha: t.head,
       status: "completed",
       conclusion: out.conclusion,
       output: { title: out.title, summary: out.summary },
       details_url: t.runUrl,
-    }),
-    "post the check run",
-  );
+    });
+  await must(post(t.checkName), "post the check run");
+  if (!t.aiReviewCheck) return;
+  const copy = await post(AI_REVIEW).catch((e: Error) => ({ status: 0, data: { message: e.message } }));
+  if (copy.status !== 201) console.warn(`could not post the ${AI_REVIEW} check run: ${copy.status} ${copy.data?.message ?? ""}`);
 }
 
 /** clearNotices deletes this App's earlier no-verdict notices on the pull request. */

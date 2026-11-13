@@ -55,11 +55,15 @@ test("publish rebuilds the verdict from the base commit and publishes as the run
     const [{ target, outcome }] = s.published as [{ target: Target; outcome: any }];
     assert.equal(target.runUrl, "https://github.com/sei-protocol/sei-chain/actions/runs/9/attempts/2");
     assert.equal(target.shadow, true);
+    assert.equal(target.aiReviewCheck, false);
     assert.deepEqual(outcome.verdict.accepted, ["the legacy store keeps its lock"]);
     assert.equal(outcome.verdict.settledBy, "codex scout");
 
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: { decision: "lgtm" } } });
     assert.match((s.published[1]!.outcome as { failure: string }).failure, /broke the contract/);
+
+    for (const shadow of [false, true, undefined]) await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, shadow, aiReviewCheck: true });
+    assert.deepEqual(s.published.slice(2).map((p) => p.target.aiReviewCheck), [true, false, false]);
 
     const asked = claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "dependabot[bot]" });
     assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, asked)).status, 200);
