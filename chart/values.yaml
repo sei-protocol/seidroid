@@ -33,7 +33,8 @@ config:
   trunk: main
   checkName: Seidroid Review
   # The audience a caller's OIDC token must be issued for: the origin callers
-  # reach the service at. Defaults to https:// and the first httpRoute hostname.
+  # reach the service at. Defaults to https:// and the first httpRoute hostname
+  # without a wildcard.
   audience: ""
 
 # More ConfigMaps or Secrets to load settings from, as container envFrom
