@@ -101,7 +101,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   const submission = path.join(o.outDir, "submission.json");
   rmSync(submission, { force: true });
   const prompt = promptFor(o.role, o.request, o.sessionDir);
-  const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role, ...(o.home ? { SEIDROID_HOME: o.home } : {}) };
+  const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role, ...(o.home ? { SEIDROID_HOME: o.home, TMPDIR: o.home } : {}) };
   for (const k of WITHHELD_ENV) delete env[k];
 
   const started = Date.now();
