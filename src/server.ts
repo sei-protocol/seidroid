@@ -80,6 +80,7 @@ const REACTED_AT: Record<string, string> = { issue_comment: "issues", pull_reque
 
 const MAX_REQUEST = 1 << 20;
 const SHA = /^[0-9a-f]{40}$/;
+const CALLER = /^\.github\/workflows\/[\w.-]+\.ya?ml$/;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -116,11 +117,29 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   /** admits says whether login may ask for a review: an allowed bot or an active member of the team. */
   const admits = async (gh: GitHub, login: string): Promise<boolean> => cfg.bots.includes(login) || (await member(gh, login));
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, and a request only from the team or an allowed bot. */
+  /** callerOnBase says whether a pull_request run's calling workflow is the same file as on the base of the merge it runs on. */
+  const callerOnBase = async (gh: GitHub, claims: Claims, caller: string): Promise<boolean> => {
+    const base = `/repos/${claims.repository}`;
+    const merge = SHA.test(claims.sha) ? await gh.rest<{ parents?: { sha: string }[] }>("GET", `${base}/commits/${claims.sha}`) : undefined;
+    const parent = merge?.status === 200 ? merge.data.parents?.[0]?.sha : undefined;
+    if (!parent) return false;
+    const blob = async (ref: string) => {
+      const r = await gh.rest<{ sha?: string }>("GET", `${base}/contents/${caller}?ref=${ref}`);
+      return r.status === 200 ? r.data.sha : undefined;
+    };
+    const [ran, onBase] = await Promise.all([blob(claims.sha), blob(parent)]);
+    return ran !== undefined && ran === onBase;
+  };
+
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request and from its base's workflow, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
     if (claims.event_name === "pull_request") {
       if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`);
+      const caller = claims.workflow_ref.startsWith(`${claims.repository}/`) ? claims.workflow_ref.slice(claims.repository.length + 1).replace(/@[^@]*$/, "") : "";
+      if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
+        throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`);
+      }
     } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
     }

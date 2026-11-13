@@ -10,6 +10,8 @@ export interface Claims {
   repository_owner: string;
   job_workflow_ref: string;
   job_workflow_sha: string;
+  workflow_ref: string;
+  sha: string;
   actor: string;
   event_name: string;
   ref: string;

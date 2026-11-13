@@ -9,8 +9,10 @@ import { handler, type Config } from "../src/server.ts";
 
 const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
 const HEAD = "b".repeat(40);
+const MERGE = "f".repeat(40);
 const claims = (over: Partial<Claims> = {}): Claims => ({
   repository: "sei-protocol/sei-chain", repository_owner: "sei-protocol", job_workflow_ref: `${cfg.workflow}@${"a".repeat(40)}`, job_workflow_sha: "a".repeat(40),
+  workflow_ref: "sei-protocol/sei-chain/.github/workflows/seidroid.yml@refs/pull/7/merge", sha: MERGE,
   actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
 });
 
@@ -44,6 +46,9 @@ const base: Record<string, (body?: any) => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
   [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
   [`GET ${repo}/contents/REVIEW.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- the legacy store keeps its lock\n").toString("base64") }),
+  [`GET ${repo}/commits/${MERGE}`]: ok({ parents: [{ sha: "c".repeat(40) }, { sha: HEAD }] }),
+  [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${MERGE}`]: ok({ sha: "1".repeat(40) }),
+  [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`]: ok({ sha: "1".repeat(40) }),
 };
 const submission = { read: 1, decision: "approve", summary: "Fine." };
 
@@ -100,6 +105,10 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       [{ pr: -1, head: HEAD }, claims(), 400, /pr must be/],
       [{ pr: 7, head: "main" }, claims(), 400, /head must be/],
       [{ pr: 7, head: HEAD }, claims({ ref: "refs/pull/8/merge" }), 403, /not pull request 7/],
+      [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/other.yml@refs/pull/7/merge" }), 403, /changes .github\/workflows\/other.yml/],
+      [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/other/.github/workflows/seidroid.yml@refs/pull/7/merge" }), 403, /changes sei-protocol\/other/],
+      [{ pr: 7, head: HEAD }, claims({ sha: "e".repeat(40) }), 403, /changes .github\/workflows\/seidroid.yml/],
+      [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/../x.yml@refs/pull/7/merge" }), 403, /changes .github\/workflows\/..\/x.yml/],
       [{ pr: 7, head: HEAD }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "mallory" }), 403, /not an active member/],
     ];
     for (const [body, c, status, err] of cases) {
@@ -110,6 +119,21 @@ test("publish refuses tokens and requests it cannot trust", async () => {
     assert.equal(s.published.length, 1);
   } finally {
     s.close();
+  }
+});
+
+test("publish refuses a pull_request run whose pull request changes its workflow", async () => {
+  const caller = `GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`;
+  for (const changed of [ok({ sha: "2".repeat(40) }), () => ({ status: 404, data: {} })]) {
+    const s = await serve({ ...base, [caller]: changed });
+    try {
+      const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
+      assert.equal(r.status, 403);
+      assert.match(r.body.error, /changes .github\/workflows\/seidroid.yml/);
+      assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "dependabot[bot]" }))).status, 200);
+    } finally {
+      s.close();
+    }
   }
 });
 
