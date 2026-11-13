@@ -13,7 +13,7 @@ import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { readingOf, settleByScouts } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
-import { clip } from "./text.ts";
+import { clip, guidelinesPath } from "./text.ts";
 
 /** Event is the part of a workflow run's trigger the guard reads. */
 export interface Event {
@@ -47,17 +47,19 @@ export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }
 const AUDIENCE = "seidroid";
 const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 
-/** requested reports whether a comment asks for a review: a line holding just the phrase and "review". */
-export const requested = (body: string, phrase: string): boolean =>
-  body.split("\n").some((l) => l.trim().split(/\s+/).join(" ").toLowerCase() === `${phrase} review`.toLowerCase());
+/** commands are a comment's lines, normalised for matching a command: whitespace collapsed, lower case, no leading @. */
+const commands = (body: string): string[] => body.split("\n").map((l) => l.trim().split(/\s+/).join(" ").toLowerCase().replace(/^@/, ""));
+
+/** bare is the trigger phrase without its @, which a command may leave out. */
+const bare = (phrase: string): string => phrase.toLowerCase().replace(/^@/, "");
+
+/** requested reports whether a comment asks for a review: a line holding just the phrase, with or without its @, and "review". */
+export const requested = (body: string, phrase: string): boolean => commands(body).includes(`${bare(phrase)} review`);
 
 /** reserved reports whether a comment holds a review command seidroid v1 handles, such as "review close". */
 const reserved = (body: string, phrase: string): boolean => {
-  const close = `${phrase} review close`.toLowerCase();
-  return body.split("\n").some((l) => {
-    const line = l.trim().split(/\s+/).join(" ").toLowerCase();
-    return line === close || line.startsWith(`${close} `);
-  });
+  const close = `${bare(phrase)} review close`;
+  return commands(body).some((line) => line === close || line.startsWith(`${close} `));
 };
 
 /** commentOf is the pull request a comment event is on, with the comment and its author, or undefined for any other event. */
@@ -190,14 +192,14 @@ export function changedLines(diff: string): number {
   return n;
 }
 
-/** lay writes what the prompts name into work: the diff, the standards at the base, and the pull request's intent. */
-function lay(work: string, pull: any): { diffLines: number; hasStandards: boolean } {
+/** lay writes what the prompts name into work: the diff, the guidelines file at the base as the standards, and the pull request's intent. */
+function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: number; hasStandards: boolean } {
   const tree = path.join(work, TREE);
   const diff = git(tree, "diff", "--no-ext-diff", `${git(tree, "merge-base", pull.base.sha, pull.head.sha).trim()}..${pull.head.sha}`);
   writeFileSync(path.join(work, DIFF), diff);
   let standards = "";
   try {
-    standards = git(tree, "show", `${pull.base.sha}:REVIEW.md`);
+    standards = git(tree, "show", `${pull.base.sha}:${guidelines}`);
   } catch {}
   if (standards) writeFileSync(path.join(work, STANDARDS), standards);
   writeFileSync(path.join(work, INTENT), `# ${pull.title}\n\n${pull.body ?? ""}\n`);
@@ -314,7 +316,9 @@ async function review(o: Record<string, string>): Promise<void> {
   const pr = Number(o.pr);
   const pull = await pullAt(gh, `/repos/${owner}/${repo}`, pr, o.head);
   const work = path.resolve(o.work);
-  const { diffLines, hasStandards } = lay(work, pull);
+  const guidelines = guidelinesPath(o["guidelines-file"]);
+  if (o["guidelines-file"] && guidelines !== o["guidelines-file"]) console.log(`::warning::guidelines-file ${o["guidelines-file"]} is not a plain repository path; reading REVIEW.md instead`);
+  const { diffLines, hasStandards } = lay(work, pull, guidelines);
   const home = shellHome(o, work);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
@@ -340,7 +344,7 @@ async function review(o: Record<string, string>): Promise<void> {
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
   if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
-  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true" });
+  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
@@ -379,7 +383,7 @@ async function react(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file",
 ];
 
 async function main(): Promise<void> {

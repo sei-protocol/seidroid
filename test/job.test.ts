@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
 import { changedLines, conversation, guard, priorThreads, requested, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
+import { guidelinesPath } from "../src/text.ts";
 
 const opts: GuardOptions = { phrase: "@seidroid", skipLabel: "ai: skip-review", reReviewOnPush: false, allowedBots: ["renovate[bot]"], shadow: false };
 const repository = { full_name: "o/r" };
@@ -123,6 +124,9 @@ test("requested wants the phrase and review alone on a line", () => {
   assert.ok(requested("looks off\n  @Seidroid   REVIEW \n", "@seidroid"));
   assert.ok(!requested("please @seidroid review", "@seidroid"));
   assert.ok(!requested("@seidroid reviewed", "@seidroid"));
+  assert.ok(requested("Seidroid review", "@seidroid"));
+  assert.ok(requested("@seidroid review", "seidroid"));
+  assert.ok(!requested("please seidroid review", "@seidroid"));
 });
 
 test("priorThreads keeps the finding threads a bot opened, with their replies", async () => {
@@ -151,4 +155,11 @@ test("priorThreads keeps the finding threads a bot opened, with their replies", 
 test("changedLines counts hunk lines, not file headers", () => {
   const diff = ["diff --git a/x b/x", "--- a/x", "+++ b/x", "@@ -1,2 +1,2 @@", " same", "-old", "+-- new", "diff --git a/y b/y", "--- /dev/null", "+++ b/y", "@@ -0,0 +1 @@", "+y", ""].join("\n");
   assert.equal(changedLines(diff), 3);
+});
+
+test("guidelinesPath keeps a plain path inside the repository and reads REVIEW.md otherwise", () => {
+  assert.deepEqual(
+    ["docs/review.md", "", undefined, "/etc/passwd", "a/../b.md", "..", "a b.md", "x;rm"].map(guidelinesPath),
+    ["docs/review.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md", "REVIEW.md"],
+  );
 });

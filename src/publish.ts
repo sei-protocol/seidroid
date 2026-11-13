@@ -20,6 +20,8 @@ export interface Target {
   shadow: boolean;
   /** Post the check run a second time as AI Review, the name a branch rule written for v1 requires. */
   aiReviewCheck: boolean;
+  /** Approve a clean review; without it a clean review only comments. */
+  approve: boolean;
 }
 
 export type Outcome = { verdict: Verdict } | { failure: string };
@@ -75,14 +77,15 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
       });
       return res.status >= 500 || res.status === 0 ? landedAnyway(gh, base, t, res) : res;
     };
-    let res = await review(anchored, EVENT[decision]);
+    const event = decision === "approve" && !t.approve ? "COMMENT" : EVENT[decision];
+    let res = await review(anchored, event);
     if (res.status === 200) {
       landed.push(...anchored);
       report.inline += anchored.length;
     } else if (res.status === 422) {
       for (const f of anchored) await placeAlone(gh, base, t, f, true, landed, unplaced, report);
-      res = await review([], EVENT[decision]);
-      if (res.status === 422 && decision !== "comment") res = await review([], "COMMENT");
+      res = await review([], event);
+      if (res.status === 422 && event !== "COMMENT") res = await review([], "COMMENT");
     }
     await must(res, "post the review");
     await resolveThreads(gh, v, t, own, landed, report);

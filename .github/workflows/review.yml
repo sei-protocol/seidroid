@@ -43,7 +43,9 @@ on:
         type: boolean
         default: true
       trigger-phrase:
-        description: The mention that, followed by "review" on its own line, asks for a review.
+        description: >-
+          The mention that, followed by "review" on its own line, asks for a review. The `@` may be left out of
+          that line, so `seidroid review` asks too; a comment needs the `@` to get a reply.
         type: string
         default: '@seidroid'
       allowed-bots:
@@ -57,6 +59,16 @@ on:
         description: The label that puts nits on the conversation as well.
         type: string
         default: 'ai: nitpick'
+      approve-on-success:
+        description: Approve the pull request when the review is clean. Without it, a clean review only comments.
+        type: boolean
+        default: false
+      guidelines-file:
+        description: >-
+          The repository's review standards, read at the base commit. Empty, or anything but a plain path inside
+          the repository, reads REVIEW.md.
+        type: string
+        default: ''
       re-review-on-push:
         description: Review every push, not only the first and those that may lift a change request.
         type: boolean
@@ -97,7 +109,8 @@ jobs:
   guard:
     if: >-
       github.event_name == 'pull_request' ||
-      contains(github.event.comment.body || github.event.review.body, inputs.trigger-phrase)
+      contains(github.event.comment.body || github.event.review.body, inputs.trigger-phrase) ||
+      contains(github.event.comment.body || github.event.review.body, 'review')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -218,6 +231,8 @@ jobs:
           NITPICK: ${{ inputs.nitpick-label }}
           EXTRA: ${{ inputs.extra-instructions }}
           PREPARE: ${{ inputs.prepare }}
+          APPROVE: ${{ inputs.approve-on-success }}
+          GUIDELINES: ${{ inputs.guidelines-file }}
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         run: >-
           node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
@@ -225,6 +240,7 @@ jobs:
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
           --nitpick-label "$NITPICK" --extra-instructions "$EXTRA"
           --home "$RUNNER_TEMP/seidroid-home" --prepare "$PREPARE"
+          --approve-on-success "$APPROVE" --guidelines-file "$GUIDELINES"
           --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"
       - name: React to the outcome
         if: always() && inputs.shadow == false && needs.guard.outputs.comment != '0' && github.event_name != 'pull_request_review'
