@@ -41,7 +41,7 @@ export function comparer(m: Metrics, cfg: CompareConfig, deps: { github(owner: s
   const latest = async (gh: GitHub, s: Shadowed, name: string, slug: string): Promise<CheckRun | undefined> => {
     const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `/repos/${s.owner}/${s.repo}/commits/${s.head}/check-runs?check_name=${encodeURIComponent(name)}&filter=latest`);
     if (res.status !== 200) throw new Error(`could not read ${name} on ${s.head}: ${res.status}`);
-    return res.data.check_runs.find((c) => c.app?.slug === slug && c.status === "completed");
+    return res.data.check_runs.find((c) => c.app?.slug === slug);
   };
 
   const record = (s: Shadowed, v1: Verdicts | undefined, v1Seconds?: number, v1At?: number) => {
@@ -70,6 +70,8 @@ export function comparer(m: Metrics, cfg: CompareConfig, deps: { github(owner: s
       busy = true;
       try {
         await look(now);
+      } catch (e) {
+        console.log(JSON.stringify({ compare: "tick", error: e instanceof Error ? e.message : String(e) }));
       } finally {
         busy = false;
       }
@@ -85,15 +87,18 @@ export function comparer(m: Metrics, cfg: CompareConfig, deps: { github(owner: s
     for (const [key, s] of waiting) {
       try {
         const gh = await deps.github(s.owner, s.repo);
+        const late = now - s.at > cfg.waitMs;
         const v1 = await latest(gh, s, cfg.check, slug);
-        if (!v1) {
-          if (now - s.at > cfg.waitMs) {
+        if (v1?.status !== "completed") {
+          if (late) {
             waiting.delete(key);
             record(s, undefined);
           }
           continue;
         }
+        // v1 publishes its verdict before its job ends, so the job's time waits for the job.
         const job = await latest(gh, s, cfg.job, "github-actions");
+        if (job && job.status !== "completed" && !late) continue;
         const took = job?.started_at && job.completed_at ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000 : undefined;
         waiting.delete(key);
         record(s, verdicts({ conclusion: v1.conclusion ?? "failure", title: v1.output.title ?? "" }), took, v1.completed_at ? Date.parse(v1.completed_at) : undefined);
