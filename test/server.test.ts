@@ -16,18 +16,20 @@ const claims = (over: Partial<Claims> = {}): Claims => ({
   actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
 });
 
-async function serve(routes: Record<string, (body?: any) => Response>) {
+async function serve(routes: Record<string, (body?: any) => Response>, config: Config = cfg) {
   const published: { target: Target; outcome: Outcome }[] = [];
   const tokens = new Map<string, Claims>();
   const gh: GitHub = {
     rest: async (method, path, body): Promise<any> => (routes[`${method} ${path}`] ?? (() => ({ status: 404, data: {} })))(body),
     graphql: async (): Promise<any> => ({}),
   };
-  const h = handler(cfg, {
+  let tick = async () => {};
+  const h = handler(config, {
     verify: async (t) => tokens.get(t) ?? Promise.reject(new Error("bad signature")),
     github: async () => gh,
     bot: async () => "seidroid[bot]",
-    publish: async (_gh, target, outcome) => (published.push({ target, outcome }), { conclusion: "success", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 }),
+    publish: async (_gh, target, outcome) => (published.push({ target, outcome }), { conclusion: "success", title: "2 findings", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 }),
+    schedule: (t) => void (tick = t),
   });
   const server = createServer((req, res) => void h(req, res)).listen(0);
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -37,7 +39,8 @@ async function serve(routes: Record<string, (body?: any) => Response>) {
     const res = await fetch(url + path, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
   };
-  return { call, published, close: () => server.close(), url, tokens };
+  const metrics = async () => (await fetch(`${url}/metrics`)).text();
+  return { call, published, close: () => server.close(), url, tokens, metrics, tick: () => tick() };
 }
 
 const ok = (data: object) => () => ({ status: 200, data });
@@ -120,6 +123,52 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       assert.match(r.body.error, err);
     }
     assert.equal(s.published.length, 1);
+    const m = await s.metrics();
+    for (const [reason, n] of [["token", 1], ["replay", 1], ["owner", 1], ["workflow", 1], ["trunk", 1], ["ref", 1], ["workflow_changed", 4], ["team", 2]] as const) {
+      assert.match(m, new RegExp(`seidroid_refusals_total\\{route="POST /publish",reason="${reason}"\\} ${n}\n`));
+    }
+  } finally {
+    s.close();
+  }
+});
+
+test("publish records the review and the job's model runs in the metrics, and compares a shadow review with v1's", async () => {
+  const checks = `${repo}/commits/${HEAD}/check-runs`;
+  const v1 = { status: "completed", conclusion: "failure", started_at: "2026-11-15T10:00:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "seidroid" }, output: { title: "2 findings" } };
+  const job = { status: "completed", conclusion: "success", started_at: "2026-11-15T09:50:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "github-actions" }, output: { title: null } };
+  const s = await serve(
+    { ...base, [`GET ${checks}?check_name=review&filter=latest`]: ok({ check_runs: [v1] }), [`GET ${checks}?check_name=seidroid-review%20%2F%20Review&filter=latest`]: ok({ check_runs: [job] }) },
+    { ...cfg, compare: { check: "review", job: "seidroid-review / Review", waitMs: 60_000 } },
+  );
+  try {
+    const found = { ...submission, decision: "comment", non_blockers: ["tidy"], inline_comments: [{ path: "a.go", line: 3, side: "RIGHT", severity: "suggestion", body: "x" }, { path: "a.go", line: 4, side: "RIGHT", severity: "nit", body: "y" }] };
+    const runs = [
+      { role: "scout", model: "openai/gpt-6.1-sol", submitted: true, error: "", durationMs: 30_000, turns: 3, input: 100, output: 20, cacheRead: 5, cacheWrite: 0, cost: 0.25, commands: 0, failedCommands: 0 },
+      { role: "review", model: "anthropic/claude-opus-5{evil}", submitted: false, error: "timed out after 1200s", durationMs: 1_200_000, turns: 40, input: 1e12, output: 300, cacheRead: 0, cacheWrite: 50, cost: 3, commands: 5, failedCommands: 2 },
+    ];
+    await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: found }, runs, durationMs: 90_000 });
+    await s.call("/publish", { pr: 7, head: HEAD, outcome: { failure: "the review did not finish: timed out after 1200s" }, shadow: false });
+    await s.tick();
+    const m = await s.metrics();
+    for (const line of [
+      'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="shadow",trigger="push",conclusion="success",settled="review"} 1',
+      'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="live",trigger="push",conclusion="success",settled="none"} 1',
+      'seidroid_review_failures_total{repo="sei-protocol/sei-chain",reason="timeout"} 1',
+      'seidroid_review_duration_seconds_sum{repo="sei-protocol/sei-chain",mode="shadow"} 90',
+      'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="suggestion"} 2',
+      'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="nit"} 0',
+      'seidroid_model_runs_total{role="scout",model="openai/gpt-6.1-sol",result="submitted"} 1',
+      'seidroid_model_runs_total{role="review",model="other",result="timeout"} 1',
+      'seidroid_model_tokens_total{role="review",model="other",kind="input"} 1000000000',
+      'seidroid_model_cost_usd_total{role="scout",model="openai/gpt-6.1-sol"} 0.25',
+      'seidroid_shell_commands_total{role="review",result="failed"} 2',
+      'seidroid_comparisons_total{repo="sei-protocol/sei-chain",v1="block",v2="pass"} 1',
+      'seidroid_compared_findings_sum{repo="sei-protocol/sei-chain",reviewer="v1"} 2',
+      'seidroid_compared_findings_sum{repo="sei-protocol/sei-chain",reviewer="v2"} 2',
+      'seidroid_compared_duration_seconds_sum{repo="sei-protocol/sei-chain",reviewer="v1"} 600',
+      'seidroid_compared_duration_seconds_sum{repo="sei-protocol/sei-chain",reviewer="v2"} 90',
+      'seidroid_compared_first_total{repo="sei-protocol/sei-chain",reviewer="v1"} 1',
+    ]) assert.ok(m.includes(`${line}\n`), line);
   } finally {
     s.close();
   }
@@ -240,9 +289,13 @@ test("reply answers the asker's own comment in its thread, as the App", async ()
   });
   const asking = (event_name: string, actor = "alice") => claims({ event_name, actor, ref: "refs/heads/main" });
   try {
-    const r = await s.call("/reply", { pr: 7, comment: 5, body: "Because." }, asking("issue_comment"));
+    const r = await s.call("/reply", { pr: 7, comment: 5, body: "Because.", runs: [{ role: "reply", model: "m", submitted: true }] }, asking("issue_comment"));
     assert.deepEqual([r.status, r.body], [200, { url: "conversation" }]);
     assert.equal((await s.call("/reply", { pr: 7, comment: 9, body: "Inline." }, asking("pull_request_review_comment"))).status, 200);
+    const m = await s.metrics();
+    assert.match(m, /seidroid_replies_total\{repo="sei-protocol\/sei-chain",answered="true"\} 1\n/);
+    assert.match(m, /seidroid_replies_total\{repo="sei-protocol\/sei-chain",answered="unknown"\} 1\n/);
+    assert.match(m, /seidroid_model_runs_total\{role="reply",model="m",result="submitted"\} 1\n/);
     assert.deepEqual(posted.map(([where]) => where), ["conversation", "thread"]);
     assert.match(posted[0]![1], /^<!-- seidroid-reply -->\nBecause\.\n\n<sub>seidroid v2 · \[run\]\(https:\/\/github\.com\/sei-protocol\/sei-chain\/actions\/runs\/9\/attempts\/2\)<\/sub>$/);
     const refused: [unknown, Claims, number][] = [

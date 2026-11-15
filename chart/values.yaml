@@ -36,6 +36,14 @@ config:
   # reach the service at. Defaults to https:// and the first httpRoute hostname
   # without a wildcard.
   audience: ""
+  # Where the service finds v1's verdict on each commit it reviews in shadow, to
+  # compare the two in its metrics: the check run v1 publishes as the same App,
+  # the check run of v1's review job, and how long to wait for v1. An empty
+  # check compares nothing.
+  compare:
+    check: review
+    job: seidroid-review / Review
+    waitMinutes: 180
 
 # More ConfigMaps or Secrets to load settings from, as container envFrom
 # entries. The chart's own settings win over the same key in one of these.

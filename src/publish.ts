@@ -28,6 +28,8 @@ export type Outcome = { verdict: Verdict } | { failure: string };
 
 export interface Report {
   conclusion: CheckOutput["conclusion"];
+  /** The check run's title. */
+  title: string;
   inline: number;
   file: number;
   unplaced: number;
@@ -43,11 +45,12 @@ const AI_REVIEW = "AI Review";
 /** publish posts a review outcome on the pull request as the App, and reports what landed. */
 export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals: readonly string[] = []): Promise<Report> {
   const base = `/repos/${t.owner}/${t.repo}`;
-  const report: Report = { conclusion: "failure", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 };
+  const report: Report = { conclusion: "failure", title: "", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 };
   const secret = "verdict" in outcome ? scanSecrets(JSON.stringify(outcome.verdict), literals) : "";
   if ("failure" in outcome || secret) {
     const nv = noVerdict("failure" in outcome ? outcome.failure : `the review names something shaped like a ${secret}, so none of it was posted`, t.runUrl);
     report.conclusion = nv.check.conclusion;
+    report.title = nv.check.title;
     await check(gh, base, t, nv.check);
     if (!t.shadow) {
       await clearNotices(gh, base, t);
@@ -94,6 +97,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
 
   const out = checkOutput(v, t.includeNits, unplaced);
   report.conclusion = out.conclusion;
+  report.title = out.title;
   report.unplaced = unplaced.length;
   await check(gh, base, t, out);
   if (!t.shadow && decision !== "request_changes" && out.conclusion === "success") {

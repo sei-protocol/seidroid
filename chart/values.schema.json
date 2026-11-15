@@ -135,7 +135,8 @@
         "workflow",
         "trunk",
         "checkName",
-        "audience"
+        "audience",
+        "compare"
       ],
       "properties": {
         "team": {
@@ -168,6 +169,27 @@
         "audience": {
           "type": "string",
           "pattern": "^(https?://[^/]+)?$"
+        },
+        "compare": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "check",
+            "job",
+            "waitMinutes"
+          ],
+          "properties": {
+            "check": {
+              "type": "string"
+            },
+            "job": {
+              "type": "string"
+            },
+            "waitMinutes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         }
       }
     },

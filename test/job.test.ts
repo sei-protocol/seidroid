@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, guard, priorThreads, requested, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, guard, priorThreads, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { guidelinesPath } from "../src/text.ts";
 
@@ -197,4 +200,14 @@ test("service shows each service a token issued for that service's origin", asyn
   await service(`${origin}/base/`, "/allow", {});
   await service(origin, "/allow", {});
   assert.deepEqual(audiences, [origin, origin]);
+});
+
+test("runsIn reports each run under out with its commands counted", () => {
+  const out = mkdtempSync(path.join(tmpdir(), "runs-"));
+  for (const [dir, run] of [["scout-0", { role: "scout", commands: [] }], ["review", { role: "review", commands: [{ id: "1", command: "go test", failed: true }, { id: "2", command: "ls" }] }]] as const) {
+    mkdirSync(path.join(out, dir));
+    writeFileSync(path.join(out, dir, "run.json"), JSON.stringify(run));
+  }
+  mkdirSync(path.join(out, "empty"));
+  assert.deepEqual(runsIn(out).sort((a: any, b: any) => a.role.localeCompare(b.role)), [{ role: "review", commands: 2, failedCommands: 1 }, { role: "scout", commands: 0, failedCommands: 0 }]);
 });
