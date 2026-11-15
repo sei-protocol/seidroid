@@ -18,8 +18,6 @@
 #         contents: read
 #         pull-requests: read
 #         id-token: write
-#       secrets:
-#         openai-api-key: ${{ secrets.PLATFORM_CODE_AGENT_OPENAI_API_KEY }}
 #
 # The jobs hold read access only. The seidroid service publishes as the App, on
 # the strength of the job's GitHub OIDC token, so no repository holds its key.
@@ -100,7 +98,7 @@ on:
         default: ubuntu-latest
     secrets:
       openai-api-key:
-        description: Needed by OpenAI scouts.
+        description: Needed by OpenAI scouts only where the org has not set up OpenAI workload identity federation.
         required: false
 
 permissions: {}
@@ -217,6 +215,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.openai-api-key }}
+          OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.PLATFORM_CODE_AGENT_OPENAI_IDP_ID }}
+          OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_OPENAI_SVAC_ID }}
           ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_FDRL_ID }}
           ANTHROPIC_ORGANIZATION_ID: ${{ vars.SEI_LABS_ANTHROPIC_ORG_ID }}
           ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_SVAC_ID }}
@@ -308,6 +308,8 @@ jobs:
       - name: Reply
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.PLATFORM_CODE_AGENT_OPENAI_IDP_ID }}
+          OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_OPENAI_SVAC_ID }}
           ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_FDRL_ID }}
           ANTHROPIC_ORGANIZATION_ID: ${{ vars.SEI_LABS_ANTHROPIC_ORG_ID }}
           ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.PLATFORM_CODE_AGENT_ANTHROPIC_SVAC_ID }}

@@ -12,6 +12,8 @@ const EXTENSION = path.join(HERE, "extension.ts");
 const PI = path.join(HERE, "..", "node_modules", "@earendil-works", "pi-coding-agent", "dist", "bundle", "cli.js");
 const SESSION_ID = "seidroid";
 const OIDC_AUDIENCE = "https://api.anthropic.com";
+const OPENAI_AUDIENCE = "https://api.openai.com/v1";
+const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OIDC_REFRESH_MS = 4 * 60_000;
 const OIDC_REQUEST_MS = 30_000;
 /** Credentials the model's process never needs; the runner keeps them to itself. */
@@ -91,24 +93,47 @@ export function piArgs(role: Role, model: string, thinking: string, sessionDir?:
 export const hasSession = (sessionDir: string): boolean =>
   existsSync(sessionDir) && readdirSync(sessionDir, { recursive: true }).some((f) => String(f).endsWith(".jsonl"));
 
+/** githubIdToken asks GitHub's OIDC endpoint for a token addressed to audience. */
+async function githubIdToken(audience: string): Promise<string> {
+  const res = await fetch(`${process.env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${encodeURIComponent(audience)}`, {
+    headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+    signal: AbortSignal.timeout(OIDC_REQUEST_MS),
+  });
+  if (!res.ok) throw new Error(`the GitHub OIDC token request failed with ${res.status}`);
+  return ((await res.json()) as { value: string }).value;
+}
+
+const canRequestIdToken = (): boolean => Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN);
+
 /** keepIdentityTokenFresh rewrites the Anthropic federation token file from GitHub's OIDC endpoint until stopped. */
 async function keepIdentityTokenFresh(): Promise<() => void> {
   const file = process.env.ANTHROPIC_IDENTITY_TOKEN_FILE;
-  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const bearer = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!file || !url || !bearer || !process.env.ANTHROPIC_FEDERATION_RULE_ID) return () => {};
-  const write = async () => {
-    const res = await fetch(`${url}&audience=${encodeURIComponent(OIDC_AUDIENCE)}`, {
-      headers: { Authorization: `Bearer ${bearer}` },
-      signal: AbortSignal.timeout(OIDC_REQUEST_MS),
-    });
-    if (!res.ok) throw new Error(`the GitHub OIDC token request failed with ${res.status}`);
-    const { value } = (await res.json()) as { value: string };
-    writeFileSync(file, value, { mode: 0o600 });
-  };
+  if (!file || !canRequestIdToken() || !process.env.ANTHROPIC_FEDERATION_RULE_ID) return () => {};
+  const write = async () => writeFileSync(file, await githubIdToken(OIDC_AUDIENCE), { mode: 0o600 });
   await write();
   const timer = setInterval(() => write().catch((e) => console.error(String(e))), OIDC_REFRESH_MS);
   return () => clearInterval(timer);
+}
+
+/** openAIAccessToken exchanges the job's GitHub OIDC token for a short-lived OpenAI access token, or returns undefined when OpenAI federation is not configured. */
+export async function openAIAccessToken(tokenUrl = OPENAI_TOKEN_URL): Promise<string | undefined> {
+  const provider = process.env.OPENAI_IDENTITY_PROVIDER_ID;
+  const account = process.env.OPENAI_SERVICE_ACCOUNT_ID;
+  if (!provider || !account || !canRequestIdToken()) return undefined;
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+      subject_token: await githubIdToken(OPENAI_AUDIENCE),
+      identity_provider_id: provider,
+      service_account_id: account,
+    }),
+    signal: AbortSignal.timeout(OIDC_REQUEST_MS),
+  });
+  if (!res.ok) throw new Error(`the OpenAI token exchange failed with ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return ((await res.json()) as { access_token: string }).access_token;
 }
 
 function promptFor(role: Role, request: unknown, sessionDir?: string): string {
@@ -133,6 +158,10 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
 
   let stopRefresh: () => void;
   try {
+    if (o.model.startsWith("openai/")) {
+      const token = await openAIAccessToken();
+      if (token) env.OPENAI_API_KEY = token;
+    }
     stopRefresh = await keepIdentityTokenFresh();
   } catch (e) {
     stats.error = `no model credential: ${e instanceof Error ? e.message : String(e)}`;
