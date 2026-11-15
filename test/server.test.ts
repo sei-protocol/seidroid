@@ -28,7 +28,7 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
     verify: async (t) => tokens.get(t) ?? Promise.reject(new Error("bad signature")),
     github: async () => gh,
     bot: async () => "seidroid[bot]",
-    publish: async (_gh, target, outcome) => (published.push({ target, outcome }), { conclusion: "success", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 }),
+    publish: async (_gh, target, outcome) => (published.push({ target, outcome }), { conclusion: "success", title: "2 findings", inline: 0, file: 0, unplaced: 0, resolved: [], dismissed: 0 }),
     schedule: (t) => void (tick = t),
   });
   const server = createServer((req, res) => void h(req, res)).listen(0);

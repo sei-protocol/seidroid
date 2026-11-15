@@ -7,7 +7,7 @@ import { parseAccepted } from "./accepted.ts";
 import { comparer, type CompareConfig } from "./compare.ts";
 import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } from "./metrics.ts";
 import { publish, type Outcome, type Report } from "./publish.ts";
-import { checkOutput, replyBody } from "./render.ts";
+import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
 import { blockers, nonBlockers, parseSubmission, preExisting, reportedFindings, verdictOf, type Verdict } from "./verdict.ts";
@@ -256,8 +256,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
       if (cmp && target.shadow) {
-        const v2 = verdicts("verdict" in outcome ? checkOutput(outcome.verdict, target.includeNits) : { conclusion: "failure", title: "No verdict" });
-        cmp.add({ owner, repo, head: body.head, v2, v2Seconds: seconds(body.durationMs), at: Date.now() });
+        cmp.add({ owner, repo, head: body.head, v2: verdicts(report), v2Seconds: seconds(body.durationMs), at: Date.now() });
       }
       return report;
     },
