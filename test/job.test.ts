@@ -11,7 +11,7 @@ const opts: GuardOptions = { phrase: "@seidroid", skipLabel: "ai: skip-review", 
 const repository = { full_name: "o/r" };
 
 function gh(pull: Record<string, unknown> = {}, reviews: { state: string; body: string; user: { type: string } }[] = []): GitHub {
-  const data = { state: "open", draft: false, labels: [], head: { sha: "h", repo: { id: 1 } }, base: { repo: { id: 1 } }, ...pull };
+  const data = { state: "open", draft: false, labels: [], head: { sha: "h", repo: { id: 1 } }, base: { repo: { id: 1 } }, user: { login: "bob" }, ...pull };
   return {
     async rest(_method, path) {
       if (path === "/repos/o/r/pulls/7") return { status: 200, data } as any;
@@ -24,15 +24,15 @@ function gh(pull: Record<string, unknown> = {}, reviews: { state: string; body: 
   };
 }
 
-const push = (action: string): Event => ({ name: "pull_request", actor: "alice", payload: { action, repository, pull_request: { number: 7 } } });
+const push = (action: string, actor = "alice"): Event => ({ name: "pull_request", actor, payload: { action, repository, pull_request: { number: 7 } } });
 const ask = (body: string, actor = "alice", type = "User"): Event => ({
   name: "issue_comment",
   actor,
   payload: { action: "created", repository, issue: { number: 7, pull_request: {} }, comment: { id: 5, body, user: { type } } },
 });
 const verdict = (state: string) => ({ state, body: `${MARKER.verdict}\nreviewed`, user: { type: "Bot" } });
-const team = async () => ({ actor: true });
-const outsider = async () => ({ actor: false });
+const team = async () => ({ actor: true, author: true });
+const outsider = async () => ({ actor: false, author: false });
 
 test("guard admits what v1 admits and nothing more", async () => {
   const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp][] = [
@@ -48,6 +48,7 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["re-review on push", push("synchronize"), gh({}, [verdict("APPROVED")]), { ...opts, reReviewOnPush: true }, true, /re-reviews/],
     ["a standing change request", push("synchronize"), gh({}, [verdict("APPROVED"), verdict("CHANGES_REQUESTED")]), opts, true, /lift/],
     ["someone else's review", push("synchronize"), gh({}, [{ state: "APPROVED", body: "lgtm", user: { type: "User" } }]), opts, true, /no review yet/],
+    ["an outsider's push", push("synchronize", "mallory"), gh(), opts, false, /mallory is not on the team/],
     ["a team request", ask("@seidroid review"), gh({ draft: true }, [verdict("APPROVED")]), opts, true, /alice asked/],
     ["an outsider's request", ask("@seidroid review", "mallory"), gh(), opts, false, /mallory may not/],
     ["an allowed bot", ask("@seidroid review", "renovate[bot]", "Bot"), gh(), opts, true, /asked/],
@@ -62,6 +63,9 @@ test("guard admits what v1 admits and nothing more", async () => {
     assert.match(gate.reason, reason, name);
     assert.equal(gate.head, run ? "h" : "", name);
   }
+  const outsiders = await guard(push("opened"), opts, gh(), async () => ({ actor: true, author: false }));
+  assert.equal(outsiders.run, false);
+  assert.match(outsiders.reason, /bob is not on the team/);
   const asked = await guard(ask("@seidroid review\nRun go test ./x/"), opts, gh(), team);
   assert.equal(asked.ask, "Run go test ./x/");
   assert.equal((await guard(ask("@seidroid review\nrun it", "renovate[bot]", "Bot"), opts, gh(), team)).ask, "");
@@ -92,7 +96,7 @@ test("guard answers a team member's other mentions, outside shadow and never a b
   ];
   for (const [name, ev, client, o, reply, reason] of cases) {
     const asked: (number | undefined)[] = [];
-    const gate = await guard(ev, o, client, async (_pr, comment) => (asked.push(comment), { actor: ev.actor !== "mallory" }));
+    const gate = await guard(ev, o, client, async (_pr, comment) => (asked.push(comment), { actor: ev.actor !== "mallory", author: true }));
     assert.equal(gate.run, false, name);
     assert.equal(gate.reply, reply, name);
     assert.match(gate.reason, reason, name);

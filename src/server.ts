@@ -42,6 +42,7 @@ interface Pull {
   state: string;
   head: { sha: string; repo: { id: number } | null };
   base: { sha: string; repo: { id: number } };
+  user: { login: string };
 }
 
 interface Asked {
@@ -131,7 +132,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return ran !== undefined && ran === onBase;
   };
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request and from its base's workflow, and a request only from the team or an allowed bot. */
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and by the team, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
     if (claims.event_name === "pull_request") {
@@ -139,6 +140,9 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const caller = claims.workflow_ref.startsWith(`${claims.repository}/`) ? claims.workflow_ref.slice(claims.repository.length + 1).replace(/@[^@]*$/, "") : "";
       if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
         throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`);
+      }
+      for (const login of new Set([pull.user.login, claims.actor])) {
+        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`);
       }
     } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
