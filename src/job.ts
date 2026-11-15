@@ -43,7 +43,7 @@ export interface Gate {
   ask: string;
 }
 
-export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean }>;
+export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean; author: boolean }>;
 
 const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 
@@ -123,6 +123,8 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
   if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id, ask: asked.bot ? "" : besides(asked.body, o.phrase) };
   if (p.draft) return deny(pr, "the pull request is a draft");
+  const team = await allow(pr);
+  if (!team.actor || !team.author) return deny(pr, `${team.actor ? p.user.login : ev.actor} is not on the team, so a team member must ask for this review`);
   const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
   const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
   if (!ours.length) return admit("the pull request has no review yet");

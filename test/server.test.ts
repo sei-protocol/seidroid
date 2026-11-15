@@ -46,6 +46,8 @@ const base: Record<string, (body?: any) => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
   [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
   [`GET ${repo}/contents/REVIEW.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- the legacy store keeps its lock\n").toString("base64") }),
+  "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+  "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "active" }),
   [`GET ${repo}/commits/${MERGE}`]: ok({ parents: [{ sha: "c".repeat(40) }, { sha: HEAD }] }),
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${MERGE}`]: ok({ sha: "1".repeat(40) }),
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`]: ok({ sha: "1".repeat(40) }),
@@ -110,6 +112,7 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       [{ pr: 7, head: HEAD }, claims({ sha: "e".repeat(40) }), 403, /changes .github\/workflows\/seidroid.yml/],
       [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/../x.yml@refs/pull/7/merge" }), 403, /changes .github\/workflows\/..\/x.yml/],
       [{ pr: 7, head: HEAD }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "mallory" }), 403, /not an active member/],
+      [{ pr: 7, head: HEAD }, claims({ actor: "mallory" }), 403, /mallory is not an active member/],
     ];
     for (const [body, c, status, err] of cases) {
       const r = await s.call("/publish", body, c);
@@ -148,6 +151,18 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
+test("publish takes a pull_request run only on a team member's pull request", async () => {
+  const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
+  try {
+    const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
+    assert.equal(r.status, 403);
+    assert.match(r.body.error, /bob is not an active member/);
+    assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ event_name: "issue_comment", ref: "refs/heads/main" }))).status, 200);
+  } finally {
+    s.close();
+  }
+});
+
 test("publish refuses a pull request from a fork", async () => {
   const s = await serve({ ...base, [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 2 } }, base: { sha: "c".repeat(40), repo: { id: 1 } } }) });
   try {
@@ -163,7 +178,7 @@ test("allow reports team membership of the actor and the author", async () => {
   const reacted: string[] = [];
   const s = await serve({
     ...base,
-    "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
+    "GET /orgs/sei-protocol/teams/eng/memberships/bob": () => ({ status: 404, data: {} }),
     [`GET ${repo}/issues/comments/5`]: ok({ user: { login: "alice" } }),
     [`GET ${repo}/issues/comments/6`]: ok({ user: { login: "bob" } }),
     [`GET ${repo}/issues/comments/8`]: ok({ user: { login: "dependabot[bot]" } }),

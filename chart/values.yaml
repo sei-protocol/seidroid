@@ -20,7 +20,7 @@ githubApp:
 
 # Service settings, written to the chart's ConfigMap.
 config:
-  # The team whose members may request a review, as org/team-slug. Required.
+  # The team whose members may request a review and get one on push, as org/team-slug. Required.
   team: ""
   # Bot logins that may request a review as well, e.g. seidroid[bot].
   bots: []
