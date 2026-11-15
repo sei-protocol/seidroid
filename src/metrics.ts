@@ -24,7 +24,7 @@ export interface RunStats {
 
 /** Verdicts is how one reviewer concluded on a commit, as its check run says. */
 export interface Verdicts {
-  /** pass, block or no_verdict. */
+  /** pass, neutral, block or no_verdict. */
   verdict: string;
   findings: number;
   preExisting: number;
@@ -124,6 +124,6 @@ const FINDINGS = /^(\d+) findings?(?:, (\d+) pre-existing)?/;
 /** verdicts reads a reviewer's verdict on a commit from its check run, the same way for v1 and v2. */
 export function verdicts(c: { conclusion: string; title: string }): Verdicts {
   const m = FINDINGS.exec(c.title);
-  const verdict = NO_VERDICT.test(c.title) || !m ? "no_verdict" : c.conclusion === "success" ? "pass" : "block";
+  const verdict = NO_VERDICT.test(c.title) || !m ? "no_verdict" : c.conclusion === "success" ? "pass" : c.conclusion === "neutral" ? "neutral" : "block";
   return { verdict, findings: m ? Number(m[1]) : 0, preExisting: m?.[2] ? Number(m[2]) : 0 };
 }
