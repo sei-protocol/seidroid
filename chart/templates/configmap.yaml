@@ -12,6 +12,9 @@ data:
   SEIDROID_WORKFLOW: {{ .workflow | quote }}
   SEIDROID_TRUNK: {{ .trunk | quote }}
   SEIDROID_CHECK_NAME: {{ .checkName | quote }}
+  SEIDROID_COMPARE_CHECK: {{ .compare.check | quote }}
+  SEIDROID_COMPARE_JOB: {{ .compare.job | quote }}
+  SEIDROID_COMPARE_WAIT_MINUTES: {{ .compare.waitMinutes | quote }}
   {{- end }}
   {{- $host := "" }}
   {{- range .Values.httpRoute.hostnames }}

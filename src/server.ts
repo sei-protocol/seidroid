@@ -4,11 +4,13 @@ import { App } from "./app.ts";
 import { all, type GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
-import { publish, type Outcome } from "./publish.ts";
-import { replyBody } from "./render.ts";
+import { comparer, type CompareConfig } from "./compare.ts";
+import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } from "./metrics.ts";
+import { publish, type Outcome, type Report } from "./publish.ts";
+import { checkOutput, replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
-import { parseSubmission, verdictOf } from "./verdict.ts";
+import { blockers, nonBlockers, parseSubmission, preExisting, reportedFindings, verdictOf, type Verdict } from "./verdict.ts";
 
 export interface Config {
   /** Organisations whose repositories may publish. */
@@ -21,6 +23,8 @@ export interface Config {
   /** Bot logins that may ask for a review without being on the team. */
   bots: string[];
   checkName: string;
+  /** Where to find v1's verdict on a commit reviewed in shadow; without it nothing is compared. */
+  compare?: CompareConfig;
 }
 
 export interface Deps {
@@ -28,13 +32,18 @@ export interface Deps {
   github(owner: string, repo: string): Promise<GitHub>;
   bot(): Promise<string>;
   publish: typeof publish;
+  /** schedule runs tick every so often, for the comparison with v1. */
+  schedule?(tick: () => Promise<void>): void;
 }
 
 class HttpError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  /** Why a caller was refused, as a metric label. */
+  readonly reason?: string;
+  constructor(status: number, message: string, reason?: string) {
     super(message);
     this.status = status;
+    this.reason = reason;
   }
 }
 
@@ -80,32 +89,35 @@ const REACTION: Record<string, string | null> = { working: "eyes", success: "+1"
 const REACTED_AT: Record<string, string> = { issue_comment: "issues", pull_request_review_comment: "pulls" };
 
 const MAX_REQUEST = 1 << 20;
+const COMPARE_EVERY_MS = 2 * 60_000;
 const SHA = /^[0-9a-f]{40}$/;
 const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const used = new Map<string, number>();
-  const counts = new Map<string, number>();
+  const m = metrics();
+  const cmp = cfg.compare && comparer(m, cfg.compare, deps);
+  if (cmp) deps.schedule?.(() => cmp.tick());
 
   const authorize = async (req: IncomingMessage): Promise<{ claims: Claims; gh: GitHub; owner: string; repo: string }> => {
     const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
-    if (!token) throw new HttpError(401, "no token");
+    if (!token) throw new HttpError(401, "no token", "token");
     const claims = await deps.verify(token).catch((e: Error) => {
-      throw new HttpError(401, e.message);
+      throw new HttpError(401, e.message, "token");
     });
-    if (!cfg.owners.includes(claims.repository_owner)) throw new HttpError(403, `${claims.repository_owner} may not use this service`);
-    if (!claims.job_workflow_ref.startsWith(`${cfg.workflow}@`)) throw new HttpError(403, `${claims.job_workflow_ref} is not ${cfg.workflow}`);
+    if (!cfg.owners.includes(claims.repository_owner)) throw new HttpError(403, `${claims.repository_owner} may not use this service`, "owner");
+    if (!claims.job_workflow_ref.startsWith(`${cfg.workflow}@`)) throw new HttpError(403, `${claims.job_workflow_ref} is not ${cfg.workflow}`, "workflow");
     const now = Date.now() / 1000;
     for (const [jti, exp] of used) if (exp < now - 120) used.delete(jti);
-    if (used.has(claims.jti)) throw new HttpError(401, "token already used");
+    if (used.has(claims.jti)) throw new HttpError(401, "token already used", "replay");
     used.set(claims.jti, claims.exp);
     const [owner, repo] = claims.repository.split("/") as [string, string];
     const gh = await deps.github(owner, repo);
     const [wOwner, wRepo] = cfg.workflow.split("/");
     const onTrunk = await gh.rest<{ status: string }>("GET", `/repos/${wOwner}/${wRepo}/compare/${claims.job_workflow_sha}...${cfg.trunk}`);
     if (onTrunk.status !== 200 || !["identical", "ahead"].includes(onTrunk.data.status)) {
-      throw new HttpError(403, `${claims.job_workflow_sha} is not on ${wOwner}/${wRepo}@${cfg.trunk}`);
+      throw new HttpError(403, `${claims.job_workflow_sha} is not on ${wOwner}/${wRepo}@${cfg.trunk}`, "trunk");
     }
     return { claims, gh, owner, repo };
   };
@@ -134,18 +146,18 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
 
   /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and by the team, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
-    if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`);
+    if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`, "fork");
     if (claims.event_name === "pull_request") {
-      if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`);
+      if (claims.ref !== `refs/pull/${pr}/merge`) throw new HttpError(403, `this run is for ${claims.ref}, not pull request ${pr}`, "ref");
       const caller = claims.workflow_ref.startsWith(`${claims.repository}/`) ? claims.workflow_ref.slice(claims.repository.length + 1).replace(/@[^@]*$/, "") : "";
       if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
-        throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`);
+        throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`, "workflow_changed");
       }
       for (const login of new Set([pull.user.login, claims.actor])) {
-        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`);
+        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
       }
     } else if (!(await admits(gh, claims.actor))) {
-      throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
+      throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`, "team");
     }
   };
 
@@ -173,13 +185,13 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const id = positive(body.comment, "comment");
       if (typeof body.body !== "string" || body.body.trim() === "") throw new HttpError(400, "body must be the reply");
       const asked = Object.hasOwn(ASKED, claims.event_name) ? ASKED[claims.event_name]! : undefined;
-      if (!asked || cfg.bots.includes(claims.actor)) throw new HttpError(403, "only a person's comment is answered");
+      if (!asked || cfg.bots.includes(claims.actor)) throw new HttpError(403, "only a person's comment is answered", "bot");
       const base = `/repos/${owner}/${repo}`;
       const pull = await must(gh.rest<Pull>("GET", `${base}/pulls/${pr}`), "read the pull request");
       if (pull.state !== "open") throw new HttpError(409, `pull request ${pr} is ${pull.state}`);
       await admitted(gh, claims, pr, pull);
       const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
-      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`);
+      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`, "asker");
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
       const text = replyBody(body.body, runUrl);
       if (scanSecrets(text)) throw new HttpError(422, "the reply carries a credential");
@@ -193,7 +205,12 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         const landed = (await all<{ body?: string; html_url: string; user: { login: string } | null }>(gh, asked.answers(base, pr))).find((a) => a.user?.login === bot && a.body === text);
         return landed ? { status: 201, data: landed } : post();
       };
-      return { url: (await must(answer(), "post the reply")).html_url };
+      const url = (await must(answer(), "post the reply")).html_url;
+      const runs = runStats(body.runs);
+      recordRuns(m, runs);
+      const answered = runs.find((r) => r.role === "reply")?.submitted;
+      m.replies.inc({ repo: claims.repository, answered: answered === undefined ? "unknown" : String(answered) });
+      return { url };
     },
 
     "POST /react": async (req) => {
@@ -204,11 +221,11 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       if (typeof body.state !== "string" || !Object.hasOwn(REACTION, body.state)) throw new HttpError(400, `state must be one of ${Object.keys(REACTION).join(", ")}`);
       const at = REACTED_AT[claims.event_name];
       if (!at) throw new HttpError(409, `a ${claims.event_name} run has no comment to react to`);
-      if (!(await admits(gh, claims.actor))) throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`);
+      if (!(await admits(gh, claims.actor))) throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`, "team");
       const base = `/repos/${owner}/${repo}`;
       const asked = ASKED[claims.event_name]!;
       const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
-      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`);
+      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`, "asker");
       const path = `${base}/${at}/comments/${id}/reactions`;
       const want = REACTION[body.state]!;
       const bot = await deps.bot();
@@ -235,15 +252,22 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       }
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
       const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, aiReviewCheck: body.shadow === false && body.aiReviewCheck === true, approve: body.approve === true };
-      return deps.publish(gh, target, await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines)));
+      const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
+      const report = await deps.publish(gh, target, outcome);
+      observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
+      if (cmp && target.shadow) {
+        const v2 = verdicts("verdict" in outcome ? checkOutput(outcome.verdict, target.includeNits) : { conclusion: "failure", title: "No verdict" });
+        cmp.add({ owner, repo, head: body.head, v2, v2Seconds: seconds(body.durationMs), at: Date.now() });
+      }
+      return report;
     },
   };
 
   return async (req, res) => {
     const route = `${req.method} ${(req.url ?? "").split("?")[0]}`;
     if (route === "GET /metrics") {
-      res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
-      res.end([...counts].map(([k, n]) => `seidroid_requests_total{${k}} ${n}`).join("\n") + "\n");
+      res.writeHead(200, { "Content-Type": m.registry.contentType });
+      res.end(await m.registry.metrics());
       return;
     }
     const started = Date.now();
@@ -256,13 +280,35 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     } catch (e) {
       status = e instanceof HttpError ? e.status : 502;
       out = { error: e instanceof Error ? e.message : String(e) };
+      if (e instanceof HttpError && e.reason) m.refusals.inc({ route, reason: e.reason });
     }
-    const key = `route="${routes[route] ? route : "other"}",code="${status}"`;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const known = routes[route] ? route : "other";
+    m.requests.inc({ route: known, code: String(status) });
+    m.requestSeconds.observe({ route: known }, (Date.now() - started) / 1000);
     if (route !== "GET /healthz") console.log(JSON.stringify({ route, status, ms: Date.now() - started, ...(status >= 400 ? out as object : {}) }));
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(out));
   };
+}
+
+const seconds = (ms: unknown): number | undefined => (typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 6 * 3600_000) / 1000 : undefined);
+
+/** observe records a published review in m: its verdict, its findings and the model runs the job reports. */
+function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boolean, outcome: Outcome, report: Report, body: any): void {
+  const repo = claims.repository;
+  const mode = shadow ? "shadow" : "live";
+  const v: Verdict | undefined = "verdict" in outcome ? outcome.verdict : undefined;
+  m.reviews.inc({ repo, mode, trigger: claims.event_name === "pull_request" ? "push" : "comment", conclusion: report.conclusion, settled: !v ? "none" : v.settledBy ? "scouts" : "review" });
+  if ("failure" in outcome) m.reviewFailures.inc({ repo, reason: failureReason(outcome.failure) });
+  const took = seconds(body.durationMs);
+  if (took !== undefined) m.reviewSeconds.observe({ repo, mode }, took);
+  if (v) {
+    const severity = { blocker: blockers(v).length, suggestion: nonBlockers(v).length, nit: 0, pre_existing: preExisting(v).length };
+    for (const f of reportedFindings(v)) if (f.severity !== "nit" || includeNits) severity[f.severity]++;
+    for (const [s, n] of Object.entries(severity)) m.findings.inc({ repo, mode, severity: s }, n);
+  }
+  for (const [placement, n] of [["inline", report.inline], ["file", report.file], ["unplaced", report.unplaced]] as const) m.placed.inc({ repo, placement }, n);
+  recordRuns(m, runStats(body.runs));
 }
 
 /** outcomeOf rebuilds the verdict on the service's side: the contract is checked again and Accepted conditions come from the guidelines file at the base commit. */
@@ -323,8 +369,10 @@ if (import.meta.main) {
     bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
     checkName: env("SEIDROID_CHECK_NAME", "Seidroid Review"),
   };
+  const v1Check = env("SEIDROID_COMPARE_CHECK", "review");
+  if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
-  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish });
+  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS) });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }

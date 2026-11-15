@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -286,6 +286,16 @@ const lines = (s: string): string[] => s.split(/[\s,]+/).filter((x) => x !== "")
 const submitted = (dir: string): unknown => (existsSync(path.join(dir, "submission.json")) ? JSON.parse(readFileSync(path.join(dir, "submission.json"), "utf8")) : undefined);
 const failed = (dir: string): string => JSON.parse(readFileSync(path.join(dir, "run.json"), "utf8")).error || "it did not submit";
 
+/** runsIn reports the model runs under out for the service's metrics: their run.json, with the commands counted rather than listed. */
+export function runsIn(out: string): object[] {
+  return readdirSync(out, { withFileTypes: true }).flatMap((d) => {
+    const file = path.join(out, d.name, "run.json");
+    if (!d.isDirectory() || !existsSync(file)) return [];
+    const { commands = [], ...r } = JSON.parse(readFileSync(file, "utf8"));
+    return [{ ...r, commands: commands.length, failedCommands: commands.filter((c: { failed?: boolean }) => c.failed).length }];
+  });
+}
+
 const held = (): string[] => ["GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_RUNTIME_TOKEN", "OPENAI_API_KEY"].map((k) => process.env[k] ?? "");
 
 /** pullAt reads the pull request with its head pinned to the commit the guard saw. */
@@ -324,6 +334,7 @@ function shellHome(o: Record<string, string>, work: string): string | undefined 
 async function review(o: Record<string, string>): Promise<void> {
   const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
   const gh = client(process.env.GITHUB_TOKEN!);
+  const started = Date.now();
   const pr = Number(o.pr);
   const pull = await pullAt(gh, `/repos/${owner}/${repo}`, pr, o.head);
   const work = path.resolve(o.work);
@@ -356,7 +367,7 @@ async function review(o: Record<string, string>): Promise<void> {
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
   if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
-  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines });
+  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
@@ -381,7 +392,7 @@ async function reply(o: Record<string, string>): Promise<void> {
   let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
   if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
   writeFileSync(path.join(dir, "reply.md"), body);
-  console.log((await service(o.service, "/reply", { pr, comment, body })).url);
+  console.log((await service(o.service, "/reply", { pr, comment, body, runs: runsIn(o.out) })).url);
 }
 
 /** react sets the App's reaction on the comment that started the run, and only warns when it cannot; a conclusion other than success or failure clears it. */
