@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { emptyStats, piArgs, run, tally } from "../src/run.ts";
+import { emptyStats, openAIAccessToken, piArgs, run, tally } from "../src/run.ts";
 
 test("tally sums usage over finished assistant messages", () => {
   const s = emptyStats();
@@ -55,4 +56,37 @@ test("run records a failed credential request in run.json without starting pi", 
   assert.equal(got.submitted, false);
   assert.equal(got.exitCode, null);
   assert.match(got.error, /^no model credential/);
+});
+
+test("openAIAccessToken exchanges the job's OIDC token for an OpenAI access token", async () => {
+  const seen: { url: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c)).on("end", () => {
+      seen.push({ url: req.url!, body });
+      if (req.url!.startsWith("/oidc")) return res.end(JSON.stringify({ value: `jwt-for-${new URL(req.url!, "http://x").searchParams.get("audience")}` }));
+      const ok = JSON.parse(body).service_account_id === "svc";
+      res.writeHead(ok ? 200 : 401).end(ok ? JSON.stringify({ access_token: "short-lived" }) : '{"error":"invalid_grant"}');
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const saved = { ...process.env };
+  try {
+    assert.equal(await openAIAccessToken(`${base}/token`), undefined);
+    Object.assign(process.env, { ACTIONS_ID_TOKEN_REQUEST_URL: `${base}/oidc?x=1`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer", OPENAI_IDENTITY_PROVIDER_ID: "idp", OPENAI_SERVICE_ACCOUNT_ID: "svc" });
+    assert.equal(await openAIAccessToken(`${base}/token`), "short-lived");
+    assert.deepEqual(JSON.parse(seen.at(-1)!.body), {
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+      subject_token: "jwt-for-https://api.openai.com/v1",
+      identity_provider_id: "idp",
+      service_account_id: "svc",
+    });
+    process.env.OPENAI_SERVICE_ACCOUNT_ID = "other";
+    await assert.rejects(openAIAccessToken(`${base}/token`), /OpenAI token exchange failed with 401: \{"error":"invalid_grant"\}/);
+  } finally {
+    process.env = saved;
+    server.close();
+  }
 });
