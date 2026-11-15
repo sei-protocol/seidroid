@@ -47,7 +47,7 @@ test("comparer waits for v1's job to end, and counts v1 missing once it has wait
   const gh: GitHub = { rest: async (_m, path): Promise<any> => ({ status: 200, data: { check_runs: [{ ...runs[/check_name=(\w+)/.exec(path)![1]!], status: path.includes("=j&") ? job : "completed", completed_at: path.includes("=j&") && job === "completed" ? "1970-01-01T00:05:00Z" : "1970-01-01T00:00:01Z" }] } }), graphql: async (): Promise<any> => ({}) };
   let bot = async (): Promise<string> => Promise.reject(new Error("GitHub is down"));
   const c = comparer(m, { check: "review", job: "j", waitMs: 1000 }, { github: async () => gh, bot: () => bot() });
-  c.add({ owner: "o", repo: "r", head: "h", v2: { verdict: "pass", findings: 0, preExisting: 0 }, at: 0 });
+  c.add({ owner: "o", repo: "r", head: "h", v2: { verdict: "pass", findings: 0, preExisting: 0 }, v2Seconds: 60, at: 0 });
   await c.tick(10);
   bot = async () => "seidroid[bot]";
   await c.tick(10);
@@ -63,7 +63,7 @@ test("comparer counts v1 missing once it has waited long enough", async () => {
   let reads = 0;
   const gh: GitHub = { rest: async (): Promise<any> => (reads++, { status: 200, data: { check_runs: [{ status: "in_progress", app: { slug: "seidroid" }, output: { title: null } }] } }), graphql: async (): Promise<any> => ({}) };
   const c = comparer(m, { check: "review", job: "j", waitMs: 1000 }, { github: async () => gh, bot: async () => "seidroid[bot]" });
-  const shadowed = { owner: "o", repo: "r", head: "h", v2: { verdict: "pass", findings: 0, preExisting: 0 }, at: 0 };
+  const shadowed = { owner: "o", repo: "r", head: "h", v2: { verdict: "pass", findings: 0, preExisting: 0 }, v2Seconds: 60, at: 0 };
   c.add(shadowed);
   c.add(shadowed);
   await c.tick(500);
@@ -71,5 +71,7 @@ test("comparer counts v1 missing once it has waited long enough", async () => {
   await c.tick(2000);
   assert.equal(c.waiting, 0);
   assert.equal(reads, 2);
-  assert.match(await m.registry.metrics(), /seidroid_comparisons_total\{repo="o\/r",v1="missing",v2="pass"\} 1\n/);
+  const text = await m.registry.metrics();
+  assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="missing",v2="pass"\} 1\n/);
+  assert.doesNotMatch(text, /seidroid_compared_(findings|duration_seconds)_count\{/);
 });

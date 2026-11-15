@@ -47,11 +47,13 @@ export function comparer(m: Metrics, cfg: CompareConfig, deps: { github(owner: s
   const record = (s: Shadowed, v1: Verdicts | undefined, v1Seconds?: number, v1At?: number) => {
     const repo = `${s.owner}/${s.repo}`;
     m.compared.inc({ repo, v1: v1?.verdict ?? "missing", v2: s.v2.verdict });
-    m.comparedFindings.observe({ repo, reviewer: "v2" }, s.v2.findings);
-    if (s.v2Seconds !== undefined) m.comparedSeconds.observe({ repo, reviewer: "v2" }, s.v2Seconds);
     if (!v1) return;
     m.comparedFindings.observe({ repo, reviewer: "v1" }, v1.findings);
-    if (v1Seconds !== undefined) m.comparedSeconds.observe({ repo, reviewer: "v1" }, v1Seconds);
+    m.comparedFindings.observe({ repo, reviewer: "v2" }, s.v2.findings);
+    if (v1Seconds !== undefined && s.v2Seconds !== undefined) {
+      m.comparedSeconds.observe({ repo, reviewer: "v1" }, v1Seconds);
+      m.comparedSeconds.observe({ repo, reviewer: "v2" }, s.v2Seconds);
+    }
     if (v1At !== undefined) m.first.inc({ repo, reviewer: v1At <= s.at ? "v1" : "v2" });
   };
 
