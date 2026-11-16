@@ -183,4 +183,4 @@ export function noVerdict(reason: string, runUrl: string): { comment: string; ch
 }
 
 /** replyBody is an answer to a comment, posted as is. */
-export const replyBody = (text: string, runUrl: string): string => `${MARKER.reply}\n${fit(text)}\n\n<sub>seidroid v2 · [run](${runUrl})</sub>`;
+export const replyBody = (text: string, runUrl: string): string => `${MARKER.reply}\n${fit(text)}\n\n<sub>seidroid app · [run](${runUrl})</sub>`;

@@ -297,7 +297,7 @@ test("reply answers the asker's own comment in its thread, as the App", async ()
     assert.match(m, /seidroid_replies_total\{repo="sei-protocol\/sei-chain",answered="unknown"\} 1\n/);
     assert.match(m, /seidroid_model_runs_total\{role="reply",model="m",result="submitted"\} 1\n/);
     assert.deepEqual(posted.map(([where]) => where), ["conversation", "thread"]);
-    assert.match(posted[0]![1], /^<!-- seidroid-reply -->\nBecause\.\n\n<sub>seidroid v2 · \[run\]\(https:\/\/github\.com\/sei-protocol\/sei-chain\/actions\/runs\/9\/attempts\/2\)<\/sub>$/);
+    assert.match(posted[0]![1], /^<!-- seidroid-reply -->\nBecause\.\n\n<sub>seidroid app · \[run\]\(https:\/\/github\.com\/sei-protocol\/sei-chain\/actions\/runs\/9\/attempts\/2\)<\/sub>$/);
     const refused: [unknown, Claims, number][] = [
       [{ pr: 7, comment: 6, body: "x" }, asking("issue_comment"), 403],
       [{ pr: 7, comment: 4, body: "x" }, asking("pull_request_review"), 403],
