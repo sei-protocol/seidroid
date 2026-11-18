@@ -263,7 +263,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: seidroid-runs-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/seidroid-out/**/run.json
+          path: |
+            ${{ runner.temp }}/seidroid-out/inputs.json
+            ${{ runner.temp }}/seidroid-out/**/run.json
+            ${{ runner.temp }}/seidroid-out/**/record/*
           if-no-files-found: ignore
 
   # A comment that mentions the phrase without asking for a review gets an answer in its
@@ -339,6 +342,8 @@ jobs:
         with:
           name: seidroid-reply-${{ github.run_attempt }}
           path: |
+            ${{ runner.temp }}/seidroid-out/inputs.json
             ${{ runner.temp }}/seidroid-out/**/run.json
+            ${{ runner.temp }}/seidroid-out/**/record/*
             ${{ runner.temp }}/seidroid-out/**/reply.md
           if-no-files-found: ignore

@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, guard, priorThreads, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, guard, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
+import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
 
 const opts: GuardOptions = { phrase: "@seidroid", skipLabel: "ai: skip-review", reReviewOnPush: false, allowedBots: ["renovate[bot]"], shadow: false };
@@ -210,4 +211,17 @@ test("runsIn reports each run under out with its commands counted", () => {
   }
   mkdirSync(path.join(out, "empty"));
   assert.deepEqual(runsIn(out).sort((a: any, b: any) => a.role.localeCompare(b.role)), [{ role: "review", commands: 2, failedCommands: 1 }, { role: "scout", commands: 0, failedCommands: 0 }]);
+});
+
+test("recordInputs hashes the files laid out for the model, with the commits they come from", () => {
+  const work = mkdtempSync(path.join(tmpdir(), "work-"));
+  writeFileSync(path.join(work, "pr.diff"), "diff --git a/x b/x\n");
+  writeFileSync(path.join(work, "intent.md"), "# Title\n");
+  const out = path.join(work, "out");
+  recordInputs(out, work, { base: { sha: "b" }, head: { sha: "h" } });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(out, "inputs.json"), "utf8")), {
+    base: "b",
+    head: "h",
+    sha256: { "pr.diff": sha256("diff --git a/x b/x\n"), "intent.md": sha256("# Title\n") },
+  });
 });

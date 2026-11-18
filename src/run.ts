@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { followUpPrompt, reviewPrompt, type Request } from "./prompt.ts";
 import { replyPrompt, type ReplyRequest } from "./reply.ts";
 import { scoutPrompt, type ScoutRequest } from "./scout.ts";
+import { scanSecrets } from "./secrets.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXTENSION = path.join(HERE, "extension.ts");
@@ -72,6 +74,31 @@ export function tally(stats: Stats, record: string): void {
   stats.cacheWrite += m.usage?.cacheWrite ?? 0;
   stats.cost += m.usage?.cost?.total ?? 0;
   if (m.stopReason === "error" || m.stopReason === "aborted") stats.error = m.errorMessage || m.stopReason;
+}
+
+/** RECORD is the directory under a run's outDir holding what the job uploads: the request, the submission and the transcript. */
+const RECORD = "record";
+const MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024;
+/** Records whose content a later record holds whole: streaming deltas, partial tool output, and the turn and run summaries. */
+const REPEATS = ["message_start", "message_update", "tool_execution_update", "turn_end", "agent_end"];
+
+export const sha256 = (data: string | Buffer): string => createHash("sha256").update(data).digest("hex");
+
+/** keep is text as the record holds it: as is, or a note naming the credential it carried, with the fields of note. */
+const keep = (text: string, literals: readonly string[], note: object = {}): string => {
+  const found = scanSecrets(text, literals);
+  return found ? JSON.stringify({ ...note, withheld: found }) : text;
+};
+
+/** transcriptLine is how one pi record is kept in the transcript; undefined for a record that repeats what another holds. */
+export function transcriptLine(record: string, literals: readonly string[]): string | undefined {
+  if (record.trim() === "") return undefined;
+  let type: unknown;
+  try {
+    type = JSON.parse(record)?.type;
+  } catch {}
+  if (typeof type === "string" && REPEATS.includes(type)) return undefined;
+  return keep(record, literals, typeof type === "string" ? { type } : {});
 }
 
 export const submitTool = (role: Role): string => ({ review: "submit_review", scout: "submit_findings", reply: "submit_reply" })[role];
@@ -147,14 +174,19 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   mkdirSync(o.outDir, { recursive: true });
   const submission = path.join(o.outDir, "submission.json");
   rmSync(submission, { force: true });
+  const recordDir = path.join(o.outDir, RECORD);
+  rmSync(recordDir, { recursive: true, force: true });
+  mkdirSync(recordDir);
   const prompt = promptFor(o.role, o.request, o.sessionDir);
   const env: NodeJS.ProcessEnv = { ...process.env, SEIDROID_OUT: submission, SEIDROID_SUBMIT: o.role, ...(o.home ? { SEIDROID_HOME: o.home, TMPDIR: o.home } : {}) };
   for (const k of WITHHELD_ENV) delete env[k];
+  const literals = () => [...WITHHELD_ENV, "OPENAI_API_KEY"].flatMap((k) => [process.env[k] ?? "", env[k] ?? ""]);
+  writeFileSync(path.join(recordDir, "request.json"), keep(JSON.stringify(o.request), literals()));
 
   const started = Date.now();
   const stats = emptyStats();
   const record = (exitCode: number | null, submitted: boolean) =>
-    writeFileSync(path.join(o.outDir, "run.json"), JSON.stringify({ role: o.role, model: o.model, submitted, exitCode, durationMs: Date.now() - started, ...stats }));
+    writeFileSync(path.join(o.outDir, "run.json"), JSON.stringify({ role: o.role, model: o.model, submitted, exitCode, durationMs: Date.now() - started, promptSha256: sha256(prompt), ...stats }));
 
   let stopRefresh: () => void;
   try {
@@ -167,6 +199,15 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
     stats.error = `no model credential: ${e instanceof Error ? e.message : String(e)}`;
     return record(null, false);
   }
+  const held = literals();
+  const transcript = openSync(path.join(recordDir, "transcript.jsonl"), "w");
+  let transcribed = 0;
+  const transcribe = (r: string) => {
+    const line = transcriptLine(r, held);
+    if (line === undefined || transcribed > MAX_TRANSCRIPT_BYTES) return;
+    transcribed += Buffer.byteLength(line) + 1;
+    writeSync(transcript, transcribed > MAX_TRANSCRIPT_BYTES ? `${JSON.stringify({ type: "truncated" })}\n` : `${line}\n`);
+  };
   const child = spawn(process.execPath, [PI, ...piArgs(o.role, o.model, o.thinking, o.sessionDir, o.home !== undefined)], { env, stdio: ["pipe", "pipe", "inherit"] });
   const timer = setTimeout(() => {
     stats.error = `timed out after ${o.timeoutMs / 1000}s`;
@@ -176,7 +217,10 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
     const records = (pending + chunk).split("\n");
     pending = records.pop() ?? "";
-    for (const r of records) tally(stats, r);
+    for (const r of records) {
+      tally(stats, r);
+      transcribe(r);
+    }
   });
   child.stdin.on("error", () => {});
   child.stdin.end(prompt);
@@ -184,8 +228,11 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   clearTimeout(timer);
   stopRefresh();
   tally(stats, pending);
+  transcribe(pending);
+  closeSync(transcript);
 
   const submitted = existsSync(submission);
+  if (submitted) writeFileSync(path.join(recordDir, "submission.json"), keep(readFileSync(submission, "utf8"), held));
   if (!submitted && stats.error === "") stats.error = code === 0 ? `the model ended without calling ${submitTool(o.role)}` : `pi exited with ${code}`;
   record(code, submitted);
 }

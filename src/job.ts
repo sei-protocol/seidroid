@@ -8,7 +8,7 @@ import { all, client, type GitHub } from "./github.ts";
 import type { PriorThread } from "./history.ts";
 import { DIFF, INTENT, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
 import { MARKER } from "./render.ts";
-import { run } from "./run.ts";
+import { run, sha256 } from "./run.ts";
 import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { readingOf, settleByScouts } from "./scout.ts";
@@ -217,6 +217,14 @@ function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: nu
   return { diffLines: changedLines(diff), hasStandards: standards !== "" };
 }
 
+/** recordInputs writes inputs.json to out: the commits reviewed and the SHA-256 of each file laid in work for the model to read. */
+export function recordInputs(out: string, work: string, pull: any): void {
+  const files = [DIFF, STANDARDS, INTENT, QUESTION].filter((f) => existsSync(path.join(work, f)));
+  const sha = Object.fromEntries(files.map((f) => [f, sha256(readFileSync(path.join(work, f)))]));
+  mkdirSync(out, { recursive: true });
+  writeFileSync(path.join(out, "inputs.json"), JSON.stringify({ base: pull.base.sha, head: pull.head.sha, sha256: sha }));
+}
+
 const MAX_SAID = 8_000;
 const MAX_THREAD = 20;
 const MAX_EARLIER = 30;
@@ -341,6 +349,7 @@ async function review(o: Record<string, string>): Promise<void> {
   const guidelines = guidelinesPath(o["guidelines-file"]);
   if (o["guidelines-file"] && guidelines !== o["guidelines-file"]) console.log(`::warning::guidelines-file ${o["guidelines-file"]} is not a plain repository path; reading REVIEW.md instead`);
   const { diffLines, hasStandards } = lay(work, pull, guidelines);
+  recordInputs(o.out, work, pull);
   const home = shellHome(o, work);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
@@ -381,8 +390,10 @@ async function reply(o: Record<string, string>): Promise<void> {
   const pr = Number(o.pr);
   const comment = Number(o.comment);
   const work = path.resolve(o.work);
-  const { diffLines } = lay(work, await pullAt(gh, base, pr, o.head));
+  const pull = await pullAt(gh, base, pr, o.head);
+  const { diffLines } = lay(work, pull);
   writeFileSync(path.join(work, QUESTION), await conversation(gh, base, pr, process.env.GITHUB_EVENT_NAME!, comment));
+  recordInputs(o.out, work, pull);
   const home = shellHome(o, work);
   process.chdir(work);
   const dir = path.join(o.out, "reply");

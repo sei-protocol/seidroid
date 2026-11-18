@@ -4,7 +4,8 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { emptyStats, openAIAccessToken, piArgs, run, tally } from "../src/run.ts";
+import { emptyStats, openAIAccessToken, piArgs, run, sha256, tally, transcriptLine } from "../src/run.ts";
+import { scoutPrompt } from "../src/scout.ts";
 
 test("tally sums usage over finished assistant messages", () => {
   const s = emptyStats();
@@ -45,10 +46,13 @@ test("run records a failed credential request in run.json without starting pi", 
     ANTHROPIC_FEDERATION_RULE_ID: "rule",
     ANTHROPIC_IDENTITY_TOKEN_FILE: path.join(dir, "token"),
     ACTIONS_ID_TOKEN_REQUEST_URL: "http://127.0.0.1:1/token?x=1",
-    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer-held-by-the-runner",
   });
+  const request = { repo: "o/r", pr: 1, diffLines: 1 };
+  const second = path.join(dir, "second");
   try {
-    await run({ role: "scout", request: { repo: "o/r", pr: 1, diffLines: 1 }, outDir: dir, model: "m", thinking: "high", timeoutMs: 1000 });
+    await run({ role: "scout", request, outDir: dir, model: "m", thinking: "high", timeoutMs: 1000 });
+    await run({ role: "scout", request: { ...request, repo: "bearer-held-by-the-runner" }, outDir: second, model: "m", thinking: "high", timeoutMs: 1000 });
   } finally {
     process.env = saved;
   }
@@ -56,6 +60,20 @@ test("run records a failed credential request in run.json without starting pi", 
   assert.equal(got.submitted, false);
   assert.equal(got.exitCode, null);
   assert.match(got.error, /^no model credential/);
+  assert.equal(got.promptSha256, sha256(scoutPrompt(request)));
+  assert.deepEqual(JSON.parse(readFileSync(path.join(dir, "record", "request.json"), "utf8")), request);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(second, "record", "request.json"), "utf8")), { withheld: "a credential this process holds" });
+});
+
+test("transcriptLine keeps whole records, drops repeats and withholds credentials", () => {
+  const end = JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+  assert.equal(transcriptLine(end, []), end);
+  assert.equal(transcriptLine("not json", []), "not json");
+  for (const type of ["message_start", "message_update", "tool_execution_update", "turn_end", "agent_end"]) assert.equal(transcriptLine(JSON.stringify({ type }), []), undefined, type);
+  assert.equal(transcriptLine("", []), undefined);
+  const leak = JSON.stringify({ type: "tool_execution_end", result: { content: [{ type: "text", text: "token-held-here" }] } });
+  assert.equal(transcriptLine(leak, ["token-held-here"]), JSON.stringify({ type: "tool_execution_end", withheld: "a credential this process holds" }));
+  assert.equal(transcriptLine("ghp_abcdefghijklmnopqrstuvwxyz0123", []), JSON.stringify({ withheld: "github token" }));
 });
 
 test("openAIAccessToken exchanges the job's OIDC token for an OpenAI access token", async () => {
