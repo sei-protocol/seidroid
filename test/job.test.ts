@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, guard, priorThreads, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, earlierFindings, guard, priorThreads, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { guidelinesPath } from "../src/text.ts";
 
@@ -200,6 +200,46 @@ test("service shows each service a token issued for that service's origin", asyn
   await service(`${origin}/base/`, "/allow", {});
   await service(origin, "/allow", {});
   assert.deepEqual(audiences, [origin, origin]);
+});
+
+test("earlierFindings reads the service's record in shadow, never the threads on the pull request", async (t) => {
+  const asked: unknown[] = [];
+  let status = 200;
+  const recorded = [{ id: "", file: "a.go", line: 3, body: "**blocker** — panics", replies: [], resolved: false }];
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url!, "http://x");
+    let body = "";
+    req.on("data", (c) => (body += c)).on("end", () => {
+      if (url.pathname === "/history") asked.push(JSON.parse(body));
+      if (url.pathname === "/history") res.statusCode = status;
+      res.setHeader("Content-Type", "application/json").end(url.pathname === "/token" ? '{"value":"t"}' : JSON.stringify({ threads: recorded }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => srv.close());
+  const origin = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  Object.assign(process.env, { ACTIONS_ID_TOKEN_REQUEST_URL: `${origin}/token?x=1`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer" });
+  t.after(() => {
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  });
+  let read = 0;
+  const gh: GitHub = {
+    async rest() {
+      throw new Error("unused");
+    },
+    async graphql(): Promise<any> {
+      read++;
+      return { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } };
+    },
+  };
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, true), recorded);
+  assert.deepEqual(asked, [{ pr: 7 }]);
+  status = 500;
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, true), []);
+  assert.equal(read, 0);
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, false), []);
+  assert.equal(read, 1);
 });
 
 test("runsIn reports each run under out with its commands counted", () => {

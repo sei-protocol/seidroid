@@ -229,6 +229,28 @@ test("publish refuses a pull request from a fork", async () => {
   }
 });
 
+test("history reads back what this App's latest check run on the newest commit recorded for the pull request", async () => {
+  const run = (slug: string, completed: string | null, text: string | null) => ({ completed_at: completed, app: { slug }, output: { text } });
+  const record = (detail: string, pr = 7) => `<!-- seidroid-review:findings {"pr":${pr},"findings":[{"file":"a.go","line":3,"severity":"blocker","detail":"${detail}"}]} -->`;
+  const runs = (check_runs: object[]) => ok({ check_runs });
+  const checks = (sha: string) => `GET ${repo}/commits/${sha}/check-runs?check_name=Seidroid%20Review&filter=all&per_page=100`;
+  const s = await serve({
+    ...base,
+    [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: ok([{ sha: "1" }, { sha: "2" }, { sha: "3" }]),
+    [checks("3")]: runs([run("seidroid", null, null), run("other", "2026-01-03T00:00:00Z", record("forged")), run("seidroid", "2026-01-02T00:00:00Z", "no record"), run("seidroid", "2026-01-04T00:00:00Z", record("another pull request", 8))]),
+    [checks("2")]: runs([run("seidroid", "2026-01-01T00:00:00Z", record("older")), run("seidroid", "2026-01-02T00:00:00Z", record("newer"))]),
+    [checks("1")]: runs([run("seidroid", "2026-01-03T00:00:00Z", record("oldest commit"))]),
+  });
+  try {
+    const r = await s.call("/history", { pr: 7 });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { threads: [{ id: "", file: "a.go", line: 3, body: "**blocker** — newer", replies: [], resolved: false }] });
+    assert.equal((await s.call("/history", { pr: 7 }, claims({ job_workflow_ref: "sei-protocol/other/.github/workflows/review.yml@main" }))).status, 403);
+  } finally {
+    s.close();
+  }
+});
+
 test("allow reports team membership of the actor and the author", async () => {
   const reacted: string[] = [];
   const s = await serve({

@@ -177,7 +177,9 @@ test("publish in shadow mode posts only the check run", async () => {
   const { gh, calls } = fake({});
   await publish(gh, { ...T, shadow: true }, { verdict: verdict({ inline_comments: [comment(), comment({ line: 9 })] }) });
   assert.deepEqual(calls.filter((c) => !c.key.startsWith("GET") && c.key !== "threads").map((c) => c.key), ["POST /repos/o/r/check-runs"]);
-  assert.match(calls.find((c) => c.key === "POST /repos/o/r/check-runs")!.body.output.summary, /`a.go:2` — b panics/);
+  const { output } = calls.find((c) => c.key === "POST /repos/o/r/check-runs")!.body;
+  assert.match(output.summary, /`a.go:2` — b panics/);
+  assert.match(output.text, /^<!-- seidroid-review:findings \{"pr":7,"findings":\[\{"file":"a.go","line":2,"severity":"blocker","detail":"b panics"\}/);
   await publish(gh, { ...T, shadow: true }, { failure: "pi exited with 1" });
   assert.equal(calls.filter((c) => c.key === "POST /repos/o/r/issues/7/comments").length, 0);
 });
