@@ -35,7 +35,7 @@ const ask = (body: string, actor = "alice", type = "User"): Event => ({
 });
 const verdict = (state: string) => ({ state, body: `${MARKER.verdict}\nreviewed`, user: { type: "Bot" } });
 const team = async () => ({ actor: true, author: true });
-const outsider = async () => ({ actor: false, author: false });
+const outsider = async () => ({ actor: false, author: true });
 
 test("guard admits what v1 admits and nothing more", async () => {
   const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp][] = [
@@ -51,7 +51,7 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["re-review on push", push("synchronize"), gh({}, [verdict("APPROVED")]), { ...opts, reReviewOnPush: true }, true, /re-reviews/],
     ["a standing change request", push("synchronize"), gh({}, [verdict("APPROVED"), verdict("CHANGES_REQUESTED")]), opts, true, /lift/],
     ["someone else's review", push("synchronize"), gh({}, [{ state: "APPROVED", body: "lgtm", user: { type: "User" } }]), opts, true, /no review yet/],
-    ["an outsider's push", push("synchronize", "mallory"), gh(), opts, false, /mallory is not on the team/],
+    ["an outsider's push to a team member's pull request", push("ready_for_review", "mallory"), gh(), opts, true, /no review yet/],
     ["a team request", ask("@seidroid review"), gh({ draft: true }, [verdict("APPROVED")]), opts, true, /alice asked/],
     ["an outsider's request", ask("@seidroid review", "mallory"), gh(), opts, false, /mallory may not/],
     ["an allowed bot", ask("@seidroid review", "renovate[bot]", "Bot"), gh(), opts, true, /asked/],

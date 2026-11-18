@@ -115,7 +115,6 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       [{ pr: 7, head: HEAD }, claims({ sha: "e".repeat(40) }), 403, /changes .github\/workflows\/seidroid.yml/],
       [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/../x.yml@refs/pull/7/merge" }), 403, /changes .github\/workflows\/..\/x.yml/],
       [{ pr: 7, head: HEAD }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "mallory" }), 403, /not an active member/],
-      [{ pr: 7, head: HEAD }, claims({ actor: "mallory" }), 403, /mallory is not an active member/],
     ];
     for (const [body, c, status, err] of cases) {
       const r = await s.call("/publish", body, c);
@@ -124,7 +123,7 @@ test("publish refuses tokens and requests it cannot trust", async () => {
     }
     assert.equal(s.published.length, 1);
     const m = await s.metrics();
-    for (const [reason, n] of [["token", 1], ["replay", 1], ["owner", 1], ["workflow", 1], ["trunk", 1], ["ref", 1], ["workflow_changed", 4], ["team", 2]] as const) {
+    for (const [reason, n] of [["token", 1], ["replay", 1], ["owner", 1], ["workflow", 1], ["trunk", 1], ["ref", 1], ["workflow_changed", 4], ["team", 1]] as const) {
       assert.match(m, new RegExp(`seidroid_refusals_total\\{route="POST /publish",reason="${reason}"\\} ${n}\n`));
     }
   } finally {
@@ -200,7 +199,7 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
-test("publish takes a pull_request run only on a team member's pull request", async () => {
+test("publish takes a pull_request run only on a team member's pull request, whoever triggered it", async () => {
   const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
   try {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
@@ -209,6 +208,13 @@ test("publish takes a pull_request run only on a team member's pull request", as
     assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ event_name: "issue_comment", ref: "refs/heads/main" }))).status, 200);
   } finally {
     s.close();
+  }
+  const t = await serve(base);
+  try {
+    const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ actor: "devin-ai-integration[bot]" }));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  } finally {
+    t.close();
   }
 });
 
