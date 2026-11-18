@@ -166,6 +166,22 @@ export async function priorThreads(gh: GitHub, owner: string, repo: string, pr: 
   return out;
 }
 
+/**
+ * earlierFindings reads seidroid's earlier findings on the pull request: its finding threads, or in
+ * shadow, where those threads are v1's, what its own check runs recorded. It reads none in shadow
+ * when the service cannot answer.
+ */
+export async function earlierFindings(gh: GitHub, url: string, owner: string, repo: string, pr: number, shadow: boolean): Promise<PriorThread[]> {
+  if (!shadow) return priorThreads(gh, owner, repo, pr);
+  try {
+    const { threads } = await service(url, "/history", { pr });
+    return Array.isArray(threads) ? threads : [];
+  } catch (e) {
+    console.log(`::warning::could not read seidroid's earlier findings: ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  }
+}
+
 /** oidc mints a GitHub Actions OIDC token for audience. */
 async function oidc(audience: string): Promise<string> {
   const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
@@ -359,7 +375,7 @@ async function review(o: Record<string, string>): Promise<void> {
   if (settled) {
     outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
   } else {
-    const threads = await priorThreads(gh, owner, repo, pr);
+    const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
     const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
     await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home });

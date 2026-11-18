@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { collapseRepeats, fitThreads, historyStep, openThreadsStep, threadUpdateStep, type PriorThread } from "../src/history.ts";
+import { collapseRepeats, fitThreads, historyStep, openThreadsStep, recordedThreads, recordFindings, threadUpdateStep, type PriorThread } from "../src/history.ts";
+import type { Finding } from "../src/verdict.ts";
 import { clip, oneLine } from "../src/text.ts";
 
 const thread = (over: Partial<PriorThread> = {}): PriorThread => ({
@@ -73,4 +74,22 @@ test("openThreadsStep shows the finding only where locations repeat", () => {
   assert.match(text, /PRRT_a\] — leaks a handle/);
   assert.match(text, /PRRT_b\] — races/);
   assert.doesNotMatch(openThreadsStep([thread()], at).join("\n"), / — leaks/);
+});
+
+test("recordFindings hides the findings in a comment that recordedThreads reads back", () => {
+  const f = (over: Partial<Finding> = {}): Finding => ({ file: "a.go", line: 3, side: "RIGHT", severity: "blocker", detail: "panics --> <b>", supersedes: ["PRRT_x"], ...over });
+  const note = recordFindings([f(), f({ file: "b.go", line: 9, severity: "nit", detail: "x".repeat(900) })]);
+  assert.equal(note.indexOf("-->"), note.length - 3);
+  assert.deepEqual(recordedThreads(note), [
+    { id: "", file: "a.go", line: 3, body: "**blocker** — panics --> <b>", replies: [], resolved: false },
+    { id: "", file: "b.go", line: 9, body: `**nit** — ${clip("x".repeat(900), 500)}`, replies: [], resolved: false },
+  ]);
+  assert.deepEqual(recordedThreads(recordFindings([])), []);
+  const many = recordFindings(Array.from({ length: 500 }, () => f({ detail: "y".repeat(500) })));
+  assert.ok(Buffer.byteLength(many) <= 60_000);
+  assert.ok(recordedThreads(many)!.length > 50);
+
+  for (const text of [null, "", "2 findings", "<!-- seidroid-review:findings {} -->", "<!-- seidroid-review:findings [ -->"]) assert.equal(recordedThreads(text), undefined);
+  const forged = '<!-- seidroid-review:findings [{"file":"a.go","line":1.5,"severity":"blocker","detail":"d"},{"file":"a.go","line":1,"severity":"fatal","detail":"d"},{"file":"a.go","line":1,"severity":"nit","detail":"kept"}] -->';
+  assert.deepEqual(recordedThreads(forged)?.map((t) => t.body), ["**nit** — kept"]);
 });

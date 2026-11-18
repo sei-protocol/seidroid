@@ -6,7 +6,7 @@ import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
 import { comparer, type CompareConfig } from "./compare.ts";
 import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } from "./metrics.ts";
-import { publish, type Outcome, type Report } from "./publish.ts";
+import { publish, recordedHistory, type Outcome, type Report } from "./publish.ts";
 import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
@@ -176,6 +176,12 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (comment.user.login === claims.actor) await gh.rest("POST", `${path}/reactions`, { content: "eyes" });
       }
       return { actor, author: await admits(gh, author) };
+    },
+
+    "POST /history": async (req) => {
+      const { gh, owner, repo } = await authorize(req);
+      const pr = positive((await json(req)).pr, "pr");
+      return { threads: await recordedHistory(gh, `/repos/${owner}/${repo}`, pr, cfg.checkName, await deps.bot()) };
     },
 
     "POST /reply": async (req) => {

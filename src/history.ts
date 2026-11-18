@@ -1,4 +1,4 @@
-import { wellFormedThreadId } from "./verdict.ts";
+import { wellFormedThreadId, type Finding } from "./verdict.ts";
 import { block, prose } from "./prose.ts";
 import { byteLength, clip, oneLine } from "./text.ts";
 
@@ -15,6 +15,42 @@ export interface PriorThread {
   body: string;
   replies: string[];
   resolved: boolean;
+}
+
+/** RECORD opens the hidden note in which a check run records its findings for a later review to read back. */
+const RECORD = "<!-- seidroid-review:findings ";
+const RECORD_END = " -->";
+const MAX_RECORD = 60_000;
+const SEVERITIES: readonly string[] = ["blocker", "suggestion", "nit"];
+
+/** recordFindings is the hidden note a check run carries in its text, holding as many of its findings as fit. */
+export function recordFindings(findings: readonly Finding[]): string {
+  const entries: string[] = [];
+  let size = byteLength(RECORD + "[]" + RECORD_END);
+  for (const f of findings) {
+    // Escaping < and > keeps a detail from closing the comment early.
+    const entry = JSON.stringify({ file: f.file, line: f.line, severity: f.severity, detail: clip(f.detail, MAX_DETAIL) }).replace(/[<>]/g, (c) => (c === "<" ? "\\u003c" : "\\u003e"));
+    size += byteLength(entry) + 1;
+    if (size > MAX_RECORD) break;
+    entries.push(entry);
+  }
+  return `${RECORD}[${entries.join(",")}]${RECORD_END}`;
+}
+
+const recorded = (e: any): e is Pick<Finding, "file" | "line" | "severity" | "detail"> =>
+  typeof e?.file === "string" && Number.isSafeInteger(e.line) && SEVERITIES.includes(e.severity) && typeof e.detail === "string";
+
+/** recordedThreads reads back the findings a check run's text records, as threads; undefined when it records none. */
+export function recordedThreads(text: string | null | undefined): PriorThread[] | undefined {
+  if (!text?.startsWith(RECORD) || !text.endsWith(RECORD_END)) return undefined;
+  let entries: unknown;
+  try {
+    entries = JSON.parse(text.slice(RECORD.length, -RECORD_END.length));
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(entries)) return undefined;
+  return entries.filter(recorded).map((e) => ({ id: "", file: e.file, line: e.line, body: `**${e.severity}** — ${e.detail}`, replies: [], resolved: false }));
 }
 
 /** Locate names a place in the reviewed tree the way the prompt shows it. */

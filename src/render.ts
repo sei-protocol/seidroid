@@ -1,3 +1,4 @@
+import { recordFindings } from "./history.ts";
 import { clip, byteLength, oneLine } from "./text.ts";
 import {
   blockers,
@@ -159,6 +160,8 @@ export interface CheckOutput {
   conclusion: Conclusion;
   title: string;
   summary: string;
+  /** text records the findings for the next review to read back. */
+  text?: string;
 }
 
 /** checkOutput is the check run a verdict concludes. */
@@ -170,6 +173,7 @@ export function checkOutput(v: Verdict, includeNits: boolean, unplaced: readonly
     conclusion: standing(v).conclusion,
     title: plural(findings, "finding") + (pre ? `, ${pre} pre-existing` : ""),
     summary: fit(reviewBody(v, includeNits, unplaced)),
+    text: recordFindings(placeableFindings(v, includeNits, new Set())),
   };
 }
 
