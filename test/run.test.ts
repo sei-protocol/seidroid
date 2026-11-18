@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { emptyStats, openAIAccessToken, piArgs, run, sha256, tally, transcriptLine } from "../src/run.ts";
+import { emptyStats, openAIAccessToken, piArgs, run, sha256, tally, transcriber, transcriptLine } from "../src/run.ts";
 import { scoutPrompt } from "../src/scout.ts";
 
 test("tally sums usage over finished assistant messages", () => {
@@ -107,4 +107,18 @@ test("openAIAccessToken exchanges the job's OIDC token for an OpenAI access toke
     process.env = saved;
     server.close();
   }
+});
+
+test("transcriber writes kept records to its file, and nothing without one", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "transcript-"));
+  const file = path.join(dir, "transcript.jsonl");
+  const kept = transcriber(file, []);
+  for (const r of ['{"type":"message_end"}', '{"type":"message_update"}', "", '{"type":"tool_execution_end"}']) kept.write(r);
+  kept.close();
+  assert.equal(readFileSync(file, "utf8"), '{"type":"message_end"}\n{"type":"tool_execution_end"}\n');
+
+  const none = transcriber(undefined, []);
+  none.write('{"type":"message_end"}');
+  none.close();
+  assert.deepEqual(readdirSync(dir), ["transcript.jsonl"]);
 });

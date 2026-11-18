@@ -76,7 +76,7 @@ export function tally(stats: Stats, record: string): void {
   if (m.stopReason === "error" || m.stopReason === "aborted") stats.error = m.errorMessage || m.stopReason;
 }
 
-/** RECORD is the directory under a run's outDir holding what the job uploads: the request, the submission and the transcript. */
+/** RECORD is the directory under a run's outDir holding what the job uploads: the request, the submission and, when kept, the transcript. */
 const RECORD = "record";
 const MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024;
 /** Records whose content a later record holds whole: streaming deltas, partial tool output, and the turn and run summaries. */
@@ -99,6 +99,22 @@ export function transcriptLine(record: string, literals: readonly string[]): str
   } catch {}
   if (typeof type === "string" && REPEATS.includes(type)) return undefined;
   return keep(record, literals, typeof type === "string" ? { type } : {});
+}
+
+/** transcriber appends each pi record to file as transcriptLine keeps it, up to MAX_TRANSCRIPT_BYTES; with no file it keeps nothing. */
+export function transcriber(file: string | undefined, literals: readonly string[]): { write(record: string): void; close(): void } {
+  if (file === undefined) return { write() {}, close() {} };
+  const fd = openSync(file, "w");
+  let written = 0;
+  return {
+    write(record) {
+      const line = transcriptLine(record, literals);
+      if (line === undefined || written > MAX_TRANSCRIPT_BYTES) return;
+      written += Buffer.byteLength(line) + 1;
+      writeSync(fd, written > MAX_TRANSCRIPT_BYTES ? `${JSON.stringify({ type: "truncated" })}\n` : `${line}\n`);
+    },
+    close: () => closeSync(fd),
+  };
 }
 
 export const submitTool = (role: Role): string => ({ review: "submit_review", scout: "submit_findings", reply: "submit_reply" })[role];
@@ -169,8 +185,8 @@ function promptFor(role: Role, request: unknown, sessionDir?: string): string {
   return sessionDir && hasSession(sessionDir) ? followUpPrompt(request as Request) : reviewPrompt(request as Request);
 }
 
-/** run drives one pi conversation and writes submission.json (if the model submitted) and run.json to outDir. */
-export async function run(o: { role: Role; request: unknown; outDir: string; model: string; thinking: string; timeoutMs: number; sessionDir?: string; home?: string }): Promise<void> {
+/** run drives one pi conversation and writes submission.json (if the model submitted), run.json and the record to outDir; the record holds the transcript only when transcript is set. */
+export async function run(o: { role: Role; request: unknown; outDir: string; model: string; thinking: string; timeoutMs: number; sessionDir?: string; home?: string; transcript?: boolean }): Promise<void> {
   mkdirSync(o.outDir, { recursive: true });
   const submission = path.join(o.outDir, "submission.json");
   rmSync(submission, { force: true });
@@ -200,14 +216,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
     return record(null, false);
   }
   const held = literals();
-  const transcript = openSync(path.join(recordDir, "transcript.jsonl"), "w");
-  let transcribed = 0;
-  const transcribe = (r: string) => {
-    const line = transcriptLine(r, held);
-    if (line === undefined || transcribed > MAX_TRANSCRIPT_BYTES) return;
-    transcribed += Buffer.byteLength(line) + 1;
-    writeSync(transcript, transcribed > MAX_TRANSCRIPT_BYTES ? `${JSON.stringify({ type: "truncated" })}\n` : `${line}\n`);
-  };
+  const transcript = transcriber(o.transcript ? path.join(recordDir, "transcript.jsonl") : undefined, held);
   const child = spawn(process.execPath, [PI, ...piArgs(o.role, o.model, o.thinking, o.sessionDir, o.home !== undefined)], { env, stdio: ["pipe", "pipe", "inherit"] });
   const timer = setTimeout(() => {
     stats.error = `timed out after ${o.timeoutMs / 1000}s`;
@@ -219,7 +228,7 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
     pending = records.pop() ?? "";
     for (const r of records) {
       tally(stats, r);
-      transcribe(r);
+      transcript.write(r);
     }
   });
   child.stdin.on("error", () => {});
@@ -228,8 +237,8 @@ export async function run(o: { role: Role; request: unknown; outDir: string; mod
   clearTimeout(timer);
   stopRefresh();
   tally(stats, pending);
-  transcribe(pending);
-  closeSync(transcript);
+  transcript.write(pending);
+  transcript.close();
 
   const submitted = existsSync(submission);
   if (submitted) writeFileSync(path.join(recordDir, "submission.json"), keep(readFileSync(submission, "utf8"), held));

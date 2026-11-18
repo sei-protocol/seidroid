@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, guard, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, guard, keepsTranscripts, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -224,4 +224,10 @@ test("recordInputs hashes the files laid out for the model, with the commits the
     head: "h",
     sha256: { "pr.diff": sha256("diff --git a/x b/x\n"), "intent.md": sha256("# Title\n") },
   });
+});
+
+test("keepsTranscripts only for a repository known to be private", () => {
+  assert.equal(keepsTranscripts({ private: "true" }), true);
+  for (const visibility of ["false", "", "True", "null"]) assert.equal(keepsTranscripts({ private: visibility }), false);
+  assert.equal(keepsTranscripts({}), false);
 });

@@ -217,6 +217,9 @@ function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: nu
   return { diffLines: changedLines(diff), hasStandards: standards !== "" };
 }
 
+/** keepsTranscripts is whether the runs keep their transcripts: only for a repository known to be private, since anyone can read a public one's artifacts. */
+export const keepsTranscripts = (o: Record<string, string>): boolean => o.private === "true";
+
 /** recordInputs writes inputs.json to out: the commits reviewed and the SHA-256 of each file laid in work for the model to read. */
 export function recordInputs(out: string, work: string, pull: any): void {
   const files = [DIFF, STANDARDS, INTENT, QUESTION].filter((f) => existsSync(path.join(work, f)));
@@ -353,11 +356,12 @@ async function review(o: Record<string, string>): Promise<void> {
   const home = shellHome(o, work);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
+  const transcript = keepsTranscripts(o);
 
   const scouts: ScoutReading[] = await Promise.all(
     lines(o["scout-models"]).map(async (model, i) => {
       const dir = path.join(o.out, `scout-${i}`);
-      await run({ role: "scout", request: { repo: `${owner}/${repo}`, pr, diffLines }, outDir: dir, model, thinking: o.thinking, timeoutMs });
+      await run({ role: "scout", request: { repo: `${owner}/${repo}`, pr, diffLines }, outDir: dir, model, thinking: o.thinking, timeoutMs, transcript });
       return readingOf(model, (submitted(dir) as any) ?? failed(dir));
     }),
   );
@@ -371,7 +375,7 @@ async function review(o: Record<string, string>): Promise<void> {
     const threads = await priorThreads(gh, owner, repo, pr);
     const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
-    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home });
+    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home, transcript });
     const s = submitted(dir);
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
@@ -398,7 +402,7 @@ async function reply(o: Record<string, string>): Promise<void> {
   process.chdir(work);
   const dir = path.join(o.out, "reply");
   const request = { repo: `${owner}/${repo}`, pr, diffLines, hasShell: home !== undefined, extraInstructions: o["extra-instructions"] || undefined };
-  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000, home });
+  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000, home, transcript: keepsTranscripts(o) });
   const s = submitted(dir) as ReplySubmission | undefined;
   let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
   if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
@@ -418,7 +422,7 @@ async function react(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file", "ask",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file", "ask", "private",
 ];
 
 async function main(): Promise<void> {
