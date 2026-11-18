@@ -78,18 +78,19 @@ test("openThreadsStep shows the finding only where locations repeat", () => {
 
 test("recordFindings hides the findings in a comment that recordedThreads reads back", () => {
   const f = (over: Partial<Finding> = {}): Finding => ({ file: "a.go", line: 3, side: "RIGHT", severity: "blocker", detail: "panics --> <b>", supersedes: ["PRRT_x"], ...over });
-  const note = recordFindings([f(), f({ file: "b.go", line: 9, severity: "nit", detail: "x".repeat(900) })]);
+  const note = recordFindings(7, [f(), f({ file: "b.go", line: 9, severity: "nit", detail: "x".repeat(900) })]);
   assert.equal(note.indexOf("-->"), note.length - 3);
-  assert.deepEqual(recordedThreads(note), [
+  assert.equal(recordedThreads(note, 8), undefined);
+  assert.deepEqual(recordedThreads(note, 7), [
     { id: "", file: "a.go", line: 3, body: "**blocker** — panics --> <b>", replies: [], resolved: false },
     { id: "", file: "b.go", line: 9, body: `**nit** — ${clip("x".repeat(900), 500)}`, replies: [], resolved: false },
   ]);
-  assert.deepEqual(recordedThreads(recordFindings([])), []);
-  const many = recordFindings(Array.from({ length: 500 }, () => f({ detail: "y".repeat(500) })));
+  assert.deepEqual(recordedThreads(recordFindings(7, []), 7), []);
+  const many = recordFindings(7, Array.from({ length: 500 }, () => f({ detail: "y".repeat(500) })));
   assert.ok(Buffer.byteLength(many) <= 60_000);
-  assert.ok(recordedThreads(many)!.length > 50);
+  assert.ok(recordedThreads(many, 7)!.length > 50);
 
-  for (const text of [null, "", "2 findings", "<!-- seidroid-review:findings {} -->", "<!-- seidroid-review:findings [ -->"]) assert.equal(recordedThreads(text), undefined);
-  const forged = '<!-- seidroid-review:findings [{"file":"a.go","line":1.5,"severity":"blocker","detail":"d"},{"file":"a.go","line":1,"severity":"fatal","detail":"d"},{"file":"a.go","line":1,"severity":"nit","detail":"kept"}] -->';
-  assert.deepEqual(recordedThreads(forged)?.map((t) => t.body), ["**nit** — kept"]);
+  for (const text of [null, "", "2 findings", "<!-- seidroid-review:findings [] -->", '<!-- seidroid-review:findings {"pr":7} -->', "<!-- seidroid-review:findings [ -->"]) assert.equal(recordedThreads(text, 7), undefined);
+  const forged = '<!-- seidroid-review:findings {"pr":7,"findings":[{"file":"a.go","line":1.5,"severity":"blocker","detail":"d"},{"file":"a.go","line":1,"severity":"fatal","detail":"d"},{"file":"a.go","line":1,"severity":"nit","detail":"kept"}]} -->';
+  assert.deepEqual(recordedThreads(forged, 7)?.map((t) => t.body), ["**nit** — kept"]);
 });

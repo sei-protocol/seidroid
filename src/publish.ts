@@ -1,5 +1,5 @@
 import { all, type GitHub, type Response } from "./github.ts";
-import { recordedThreads, type PriorThread } from "./history.ts";
+import { recordedThreads, recordFindings, type PriorThread } from "./history.ts";
 import { partition, type DiffFile } from "./place.ts";
 import { checkOutput, findingComment, MARKER, noVerdict, summaryComment, type CheckOutput } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
@@ -97,7 +97,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
     await clearNotices(gh, base, t);
   }
 
-  const out = checkOutput(v, t.includeNits, unplaced);
+  const out = { ...checkOutput(v, t.includeNits, unplaced), text: recordFindings(t.pr, placeableFindings(v, t.includeNits, new Set())) };
   report.conclusion = out.conclusion;
   report.title = out.title;
   report.unplaced = unplaced.length;
@@ -218,7 +218,7 @@ interface CheckRun {
 
 /**
  * recordedHistory reads back the findings of this App's latest check run named checkName that
- * records any, on the newest of the pull request's commits that has one.
+ * records any for the pull request, on the newest of its commits that has one.
  */
 export async function recordedHistory(gh: GitHub, base: string, pr: number, checkName: string, bot: string): Promise<PriorThread[]> {
   const commits = await all<{ sha: string }>(gh, `${base}/pulls/${pr}/commits`, 3);
@@ -229,7 +229,7 @@ export async function recordedHistory(gh: GitHub, base: string, pr: number, chec
       .filter((c) => c.completed_at && login(c.app?.slug ?? "") === login(bot))
       .sort((a, b) => b.completed_at!.localeCompare(a.completed_at!));
     for (const c of runs) {
-      const threads = recordedThreads(c.output.text);
+      const threads = recordedThreads(c.output.text, pr);
       if (threads) return threads;
     }
   }

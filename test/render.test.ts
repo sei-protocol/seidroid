@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseSubmission, verdictOf, type Verdict } from "../src/verdict.ts";
-import { recordedThreads } from "../src/history.ts";
 import { checkOutput, defuse, findingComment, fit, MARKER, noVerdict, reviewBody, summaryComment } from "../src/render.ts";
 
 function verdict(raw: object, accepted: string[] = []): Verdict {
@@ -96,7 +95,6 @@ test("checkOutput concludes and counts the verdict", () => {
   assert.equal(c.conclusion, "failure");
   assert.equal(c.title, "2 findings, 1 pre-existing");
   assert.equal(checkOutput(verdict({}), false).title, "0 findings");
-  assert.deepEqual(recordedThreads(c.text)?.map((t) => t.body), ["**suggestion** — x"]);
   const nv = noVerdict("pi exited with 1\n# boom", "https://run");
   assert.match(nv.comment, /^<!-- seidroid-review:no-verdict -->\n\*\*This review did not complete\.\*\*.*pi exited with 1 # boom\./);
   assert.deepEqual(nv.check, { conclusion: "failure", title: "No verdict", summary: "pi exited with 1 # boom" });

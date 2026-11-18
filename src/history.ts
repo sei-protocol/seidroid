@@ -23,10 +23,11 @@ const RECORD_END = " -->";
 const MAX_RECORD = 60_000;
 const SEVERITIES: readonly string[] = ["blocker", "suggestion", "nit"];
 
-/** recordFindings is the hidden note a check run carries in its text, holding as many of its findings as fit. */
-export function recordFindings(findings: readonly Finding[]): string {
+/** recordFindings is the hidden note a check run on pull request pr carries in its text, holding as many of its findings as fit. */
+export function recordFindings(pr: number, findings: readonly Finding[]): string {
+  const open = `{"pr":${pr},"findings":[`;
   const entries: string[] = [];
-  let size = byteLength(RECORD + "[]" + RECORD_END);
+  let size = byteLength(RECORD + open + "]}" + RECORD_END);
   for (const f of findings) {
     // Escaping < and > keeps a detail from closing the comment early.
     const entry = JSON.stringify({ file: f.file, line: f.line, severity: f.severity, detail: clip(f.detail, MAX_DETAIL) }).replace(/[<>]/g, (c) => (c === "<" ? "\\u003c" : "\\u003e"));
@@ -34,23 +35,23 @@ export function recordFindings(findings: readonly Finding[]): string {
     if (size > MAX_RECORD) break;
     entries.push(entry);
   }
-  return `${RECORD}[${entries.join(",")}]${RECORD_END}`;
+  return `${RECORD}${open}${entries.join(",")}]}${RECORD_END}`;
 }
 
 const recorded = (e: any): e is Pick<Finding, "file" | "line" | "severity" | "detail"> =>
   typeof e?.file === "string" && Number.isSafeInteger(e.line) && SEVERITIES.includes(e.severity) && typeof e.detail === "string";
 
-/** recordedThreads reads back the findings a check run's text records, as threads; undefined when it records none. */
-export function recordedThreads(text: string | null | undefined): PriorThread[] | undefined {
+/** recordedThreads reads back, as threads, the findings a check run's text records for pull request pr; undefined when it records none. */
+export function recordedThreads(text: string | null | undefined, pr: number): PriorThread[] | undefined {
   if (!text?.startsWith(RECORD) || !text.endsWith(RECORD_END)) return undefined;
-  let entries: unknown;
+  let note: any;
   try {
-    entries = JSON.parse(text.slice(RECORD.length, -RECORD_END.length));
+    note = JSON.parse(text.slice(RECORD.length, -RECORD_END.length));
   } catch {
     return undefined;
   }
-  if (!Array.isArray(entries)) return undefined;
-  return entries.filter(recorded).map((e) => ({ id: "", file: e.file, line: e.line, body: `**${e.severity}** — ${e.detail}`, replies: [], resolved: false }));
+  if (note?.pr !== pr || !Array.isArray(note.findings)) return undefined;
+  return (note.findings as unknown[]).filter(recorded).map((e) => ({ id: "", file: e.file, line: e.line, body: `**${e.severity}** — ${e.detail}`, replies: [], resolved: false }));
 }
 
 /** Locate names a place in the reviewed tree the way the prompt shows it. */
