@@ -1,4 +1,5 @@
 import { all, type GitHub, type Response } from "./github.ts";
+import { recordedThreads, recordFindings, type PriorThread } from "./history.ts";
 import { partition, type DiffFile } from "./place.ts";
 import { checkOutput, findingComment, MARKER, noVerdict, summaryComment, type CheckOutput } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
@@ -41,6 +42,7 @@ const EVENT = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment:
 const DISMISSAL = "Superseded: the latest review found nothing blocking in this change.";
 const MAX_FILES = 3_000;
 const AI_REVIEW = "AI Review";
+const MAX_HISTORY_COMMITS = 30;
 
 /** publish posts a review outcome on the pull request as the App, and reports what landed. */
 export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals: readonly string[] = []): Promise<Report> {
@@ -95,7 +97,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
     await clearNotices(gh, base, t);
   }
 
-  const out = checkOutput(v, t.includeNits, unplaced);
+  const out = { ...checkOutput(v, t.includeNits, unplaced), text: recordFindings(t.pr, placeableFindings(v, t.includeNits, new Set())) };
   report.conclusion = out.conclusion;
   report.title = out.title;
   report.unplaced = unplaced.length;
@@ -199,13 +201,39 @@ async function check(gh: GitHub, base: string, t: Target, out: CheckOutput): Pro
       head_sha: t.head,
       status: "completed",
       conclusion: out.conclusion,
-      output: { title: out.title, summary: out.summary },
+      output: { title: out.title, summary: out.summary, text: out.text },
       details_url: t.runUrl,
     });
   await must(post(t.checkName), "post the check run");
   if (!t.aiReviewCheck) return;
   const copy = await post(AI_REVIEW).catch((e: Error) => ({ status: 0, data: { message: e.message } }));
   if (copy.status !== 201) console.warn(`could not post the ${AI_REVIEW} check run: ${copy.status} ${copy.data?.message ?? ""}`);
+}
+
+interface CheckRun {
+  completed_at: string | null;
+  app: { slug: string } | null;
+  output: { text: string | null };
+}
+
+/**
+ * recordedHistory reads back the findings of this App's latest check run named checkName that
+ * records any for the pull request, on the newest of its commits that has one.
+ */
+export async function recordedHistory(gh: GitHub, base: string, pr: number, checkName: string, bot: string): Promise<PriorThread[]> {
+  const commits = await all<{ sha: string }>(gh, `${base}/pulls/${pr}/commits`, 3);
+  for (const { sha } of commits.slice(-MAX_HISTORY_COMMITS).reverse()) {
+    const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `${base}/commits/${sha}/check-runs?check_name=${encodeURIComponent(checkName)}&filter=all&per_page=100`);
+    await must(res, `read the check runs on ${sha}`);
+    const runs = res.data.check_runs
+      .filter((c) => c.completed_at && login(c.app?.slug ?? "") === login(bot))
+      .sort((a, b) => b.completed_at!.localeCompare(a.completed_at!));
+    for (const c of runs) {
+      const threads = recordedThreads(c.output.text, pr);
+      if (threads) return threads;
+    }
+  }
+  return [];
 }
 
 /** clearNotices deletes this App's earlier no-verdict notices on the pull request. */

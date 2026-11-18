@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, guard, keepsTranscripts, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, conversation, earlierFindings, guard, keepsTranscripts, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -36,7 +36,7 @@ const ask = (body: string, actor = "alice", type = "User"): Event => ({
 });
 const verdict = (state: string) => ({ state, body: `${MARKER.verdict}\nreviewed`, user: { type: "Bot" } });
 const team = async () => ({ actor: true, author: true });
-const outsider = async () => ({ actor: false, author: false });
+const outsider = async () => ({ actor: false, author: true });
 
 test("guard admits what v1 admits and nothing more", async () => {
   const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp][] = [
@@ -52,7 +52,7 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["re-review on push", push("synchronize"), gh({}, [verdict("APPROVED")]), { ...opts, reReviewOnPush: true }, true, /re-reviews/],
     ["a standing change request", push("synchronize"), gh({}, [verdict("APPROVED"), verdict("CHANGES_REQUESTED")]), opts, true, /lift/],
     ["someone else's review", push("synchronize"), gh({}, [{ state: "APPROVED", body: "lgtm", user: { type: "User" } }]), opts, true, /no review yet/],
-    ["an outsider's push", push("synchronize", "mallory"), gh(), opts, false, /mallory is not on the team/],
+    ["an outsider's push to a team member's pull request", push("ready_for_review", "mallory"), gh(), opts, true, /no review yet/],
     ["a team request", ask("@seidroid review"), gh({ draft: true }, [verdict("APPROVED")]), opts, true, /alice asked/],
     ["an outsider's request", ask("@seidroid review", "mallory"), gh(), opts, false, /mallory may not/],
     ["an allowed bot", ask("@seidroid review", "renovate[bot]", "Bot"), gh(), opts, true, /asked/],
@@ -201,6 +201,46 @@ test("service shows each service a token issued for that service's origin", asyn
   await service(`${origin}/base/`, "/allow", {});
   await service(origin, "/allow", {});
   assert.deepEqual(audiences, [origin, origin]);
+});
+
+test("earlierFindings reads the service's record in shadow, never the threads on the pull request", async (t) => {
+  const asked: unknown[] = [];
+  let status = 200;
+  const recorded = [{ id: "", file: "a.go", line: 3, body: "**blocker** — panics", replies: [], resolved: false }];
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url!, "http://x");
+    let body = "";
+    req.on("data", (c) => (body += c)).on("end", () => {
+      if (url.pathname === "/history") asked.push(JSON.parse(body));
+      if (url.pathname === "/history") res.statusCode = status;
+      res.setHeader("Content-Type", "application/json").end(url.pathname === "/token" ? '{"value":"t"}' : JSON.stringify({ threads: recorded }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => srv.close());
+  const origin = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  Object.assign(process.env, { ACTIONS_ID_TOKEN_REQUEST_URL: `${origin}/token?x=1`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer" });
+  t.after(() => {
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  });
+  let read = 0;
+  const gh: GitHub = {
+    async rest() {
+      throw new Error("unused");
+    },
+    async graphql(): Promise<any> {
+      read++;
+      return { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [] } } } };
+    },
+  };
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, true), recorded);
+  assert.deepEqual(asked, [{ pr: 7 }]);
+  status = 500;
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, true), []);
+  assert.equal(read, 0);
+  assert.deepEqual(await earlierFindings(gh, origin, "o", "r", 7, false), []);
+  assert.equal(read, 1);
 });
 
 test("runsIn reports each run under out with its commands counted", () => {

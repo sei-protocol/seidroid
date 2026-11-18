@@ -123,8 +123,7 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
   if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id, ask: asked.bot ? "" : besides(asked.body, o.phrase) };
   if (p.draft) return deny(pr, "the pull request is a draft");
-  const team = await allow(pr);
-  if (!team.actor || !team.author) return deny(pr, `${team.actor ? p.user.login : ev.actor} is not on the team, so a team member must ask for this review`);
+  if (!(await allow(pr)).author) return deny(pr, `${p.user.login} is not on the team, so a team member must ask for this review`);
   const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
   const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
   if (!ours.length) return admit("the pull request has no review yet");
@@ -164,6 +163,22 @@ export async function priorThreads(gh: GitHub, owner: string, repo: string, pr: 
     after = threads.pageInfo.endCursor;
   }
   return out;
+}
+
+/**
+ * earlierFindings reads seidroid's earlier findings on the pull request: its finding threads, or in
+ * shadow, where those threads are v1's, what its own check runs recorded. It reads none in shadow
+ * when the service cannot answer.
+ */
+export async function earlierFindings(gh: GitHub, url: string, owner: string, repo: string, pr: number, shadow: boolean): Promise<PriorThread[]> {
+  if (!shadow) return priorThreads(gh, owner, repo, pr);
+  try {
+    const { threads } = await service(url, "/history", { pr });
+    return Array.isArray(threads) ? threads : [];
+  } catch (e) {
+    console.log(`::warning::could not read seidroid's earlier findings: ${e instanceof Error ? e.message : String(e)}`);
+    return [];
+  }
 }
 
 /** oidc mints a GitHub Actions OIDC token for audience. */
@@ -372,7 +387,7 @@ async function review(o: Record<string, string>): Promise<void> {
   if (settled) {
     outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
   } else {
-    const threads = await priorThreads(gh, owner, repo, pr);
+    const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
     const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
     await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home, transcript });

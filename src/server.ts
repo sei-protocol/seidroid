@@ -6,7 +6,7 @@ import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
 import { comparer, type CompareConfig } from "./compare.ts";
 import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } from "./metrics.ts";
-import { publish, type Outcome, type Report } from "./publish.ts";
+import { publish, recordedHistory, type Outcome, type Report } from "./publish.ts";
 import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
@@ -144,7 +144,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return ran !== undefined && ran === onBase;
   };
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and by the team, and a request only from the team or an allowed bot. */
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and on a team member's pull request, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`, "fork");
     if (claims.event_name === "pull_request") {
@@ -153,8 +153,8 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
         throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`, "workflow_changed");
       }
-      for (const login of new Set([pull.user.login, claims.actor])) {
-        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
+      if (!(await admits(gh, pull.user.login))) {
+        throw new HttpError(403, `${pull.user.login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
       }
     } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`, "team");
@@ -176,6 +176,12 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (comment.user.login === claims.actor) await gh.rest("POST", `${path}/reactions`, { content: "eyes" });
       }
       return { actor, author: await admits(gh, author) };
+    },
+
+    "POST /history": async (req) => {
+      const { gh, owner, repo } = await authorize(req);
+      const pr = positive((await json(req)).pr, "pr");
+      return { threads: await recordedHistory(gh, `/repos/${owner}/${repo}`, pr, cfg.checkName, await deps.bot()) };
     },
 
     "POST /reply": async (req) => {

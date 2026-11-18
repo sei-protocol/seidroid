@@ -78,3 +78,10 @@ test("replyPrompt offers the shell only when the reply has one", () => {
   assert.doesNotMatch(replyPrompt(r), /You also have bash/);
   assert.match(replyPrompt({ ...r, hasShell: true }), /You also have bash[\s\S]*thrown away after this reply/);
 });
+
+test("the checklist asks for the callee's ordering requirement when a call moves", () => {
+  const p = reviewPrompt(req()).replace(/\s+/g, " ");
+  for (const want of ["open the callee's implementation and quote what it requires of the order", "a fake or stub that accepts calls in any order cannot fail, so do not count it"]) {
+    assert.ok(p.includes(want), want);
+  }
+});

@@ -115,7 +115,6 @@ test("publish refuses tokens and requests it cannot trust", async () => {
       [{ pr: 7, head: HEAD }, claims({ sha: "e".repeat(40) }), 403, /changes .github\/workflows\/seidroid.yml/],
       [{ pr: 7, head: HEAD }, claims({ workflow_ref: "sei-protocol/sei-chain/.github/workflows/../x.yml@refs/pull/7/merge" }), 403, /changes .github\/workflows\/..\/x.yml/],
       [{ pr: 7, head: HEAD }, claims({ event_name: "issue_comment", ref: "refs/heads/main", actor: "mallory" }), 403, /not an active member/],
-      [{ pr: 7, head: HEAD }, claims({ actor: "mallory" }), 403, /mallory is not an active member/],
     ];
     for (const [body, c, status, err] of cases) {
       const r = await s.call("/publish", body, c);
@@ -124,7 +123,7 @@ test("publish refuses tokens and requests it cannot trust", async () => {
     }
     assert.equal(s.published.length, 1);
     const m = await s.metrics();
-    for (const [reason, n] of [["token", 1], ["replay", 1], ["owner", 1], ["workflow", 1], ["trunk", 1], ["ref", 1], ["workflow_changed", 4], ["team", 2]] as const) {
+    for (const [reason, n] of [["token", 1], ["replay", 1], ["owner", 1], ["workflow", 1], ["trunk", 1], ["ref", 1], ["workflow_changed", 4], ["team", 1]] as const) {
       assert.match(m, new RegExp(`seidroid_refusals_total\\{route="POST /publish",reason="${reason}"\\} ${n}\n`));
     }
   } finally {
@@ -200,7 +199,7 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
-test("publish takes a pull_request run only on a team member's pull request", async () => {
+test("publish takes a pull_request run only on a team member's pull request, whoever triggered it", async () => {
   const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
   try {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
@@ -210,6 +209,13 @@ test("publish takes a pull_request run only on a team member's pull request", as
   } finally {
     s.close();
   }
+  const t = await serve(base);
+  try {
+    const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ actor: "devin-ai-integration[bot]" }));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  } finally {
+    t.close();
+  }
 });
 
 test("publish refuses a pull request from a fork", async () => {
@@ -218,6 +224,28 @@ test("publish refuses a pull request from a fork", async () => {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
     assert.equal(r.status, 403);
     assert.match(r.body.error, /fork/);
+  } finally {
+    s.close();
+  }
+});
+
+test("history reads back what this App's latest check run on the newest commit recorded for the pull request", async () => {
+  const run = (slug: string, completed: string | null, text: string | null) => ({ completed_at: completed, app: { slug }, output: { text } });
+  const record = (detail: string, pr = 7) => `<!-- seidroid-review:findings {"pr":${pr},"findings":[{"file":"a.go","line":3,"severity":"blocker","detail":"${detail}"}]} -->`;
+  const runs = (check_runs: object[]) => ok({ check_runs });
+  const checks = (sha: string) => `GET ${repo}/commits/${sha}/check-runs?check_name=Seidroid%20Review&filter=all&per_page=100`;
+  const s = await serve({
+    ...base,
+    [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: ok([{ sha: "1" }, { sha: "2" }, { sha: "3" }]),
+    [checks("3")]: runs([run("seidroid", null, null), run("other", "2026-01-03T00:00:00Z", record("forged")), run("seidroid", "2026-01-02T00:00:00Z", "no record"), run("seidroid", "2026-01-04T00:00:00Z", record("another pull request", 8))]),
+    [checks("2")]: runs([run("seidroid", "2026-01-01T00:00:00Z", record("older")), run("seidroid", "2026-01-02T00:00:00Z", record("newer"))]),
+    [checks("1")]: runs([run("seidroid", "2026-01-03T00:00:00Z", record("oldest commit"))]),
+  });
+  try {
+    const r = await s.call("/history", { pr: 7 });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body, { threads: [{ id: "", file: "a.go", line: 3, body: "**blocker** — newer", replies: [], resolved: false }] });
+    assert.equal((await s.call("/history", { pr: 7 }, claims({ job_workflow_ref: "sei-protocol/other/.github/workflows/review.yml@main" }))).status, 403);
   } finally {
     s.close();
   }

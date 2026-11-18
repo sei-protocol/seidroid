@@ -159,6 +159,8 @@ export interface CheckOutput {
   conclusion: Conclusion;
   title: string;
   summary: string;
+  /** text records the findings for the next review to read back. */
+  text?: string;
 }
 
 /** checkOutput is the check run a verdict concludes. */
