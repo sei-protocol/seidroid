@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { DIFF, INTENT, TREE } from "./prompt.ts";
 import { prose } from "./prose.ts";
+import { COMMAND_SECONDS } from "./sandbox.ts";
 
 export const QUESTION = "question.md";
 const MAX_EXTRA_INSTRUCTIONS = 4000;
@@ -24,6 +25,6 @@ export interface ReplyRequest {
 export function replyPrompt(req: ReplyRequest): string {
   const text = (req.extraInstructions ?? "").trim();
   const extra = text ? prose("reply-extra", { text: text.slice(0, MAX_EXTRA_INSTRUCTIONS) }) : "";
-  const shell = req.hasShell ? prose("reply-shell", { tree: TREE }) : "";
+  const shell = req.hasShell ? prose("reply-shell", { tree: TREE, seconds: COMMAND_SECONDS }) : "";
   return prose("reply", { repo: req.repo, pr: req.pr, question: QUESTION, diff: DIFF, lines: req.diffLines, tree: TREE, intent: INTENT, shell, extra });
 }

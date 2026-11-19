@@ -61,7 +61,11 @@ test("with a home, bash is offered and runs in the sandbox", async () => {
     delete process.env.SEIDROID_HOME;
   }
   assert.deepEqual(tools.map((t) => t.name), ["bash", "submit_review"]);
-  assert.equal(await gate!({ toolName: "bash", input: { command: "env" } }), undefined);
+  for (const [asked, runs] of [[undefined, 300], [1000, 300], [-1, 300], [Number.NaN, 300], [30, 30]]) {
+    const input: Record<string, unknown> = { command: "env", timeout: asked };
+    assert.equal(await gate!({ toolName: "bash", input }), undefined);
+    assert.equal(input.timeout, runs, `asked ${asked}`);
+  }
   assert.ok(await gate!({ toolName: "write", input: { path: "x" } }));
   if (!canSandbox()) return;
   const r = await tools[0].execute("1", { command: "env; echo home=$HOME; echo forged > pr.diff; echo read=$(cat pr.diff)" }, undefined, undefined, {});

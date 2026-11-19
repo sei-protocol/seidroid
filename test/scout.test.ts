@@ -32,4 +32,14 @@ test("scoutPrompt points at the diff and the submit tool", () => {
   assert.match(p, /pr\.diff in your working directory, 10 lines/);
   assert.match(p, /submit_findings/);
   assert.match(p, /build constraint/);
+  assert.match(p, /read is the diff's line count/);
+});
+
+test("scoutPrompt with an earlier reading points at what changed and what it found then", () => {
+  const p = scoutPrompt({ repo: "o/r", pr: 3, diffLines: 10, since: { lines: 4, findings: [{ file: "a.go", line: 5, severity: "high", detail: "x\ny" }] } });
+  assert.match(p, /since\.diff in your working directory, 4\s+lines/);
+  assert.match(p, /pr\.diff, 10\s+lines/);
+  assert.match(p, /^  high a\.go:5 — x y$/m);
+  assert.match(p, /read is since\.diff's line count/);
+  assert.match(scoutPrompt({ repo: "o/r", pr: 3, diffLines: 10, since: { lines: 4, findings: [] } }), /^  \(nothing\)$/m);
 });

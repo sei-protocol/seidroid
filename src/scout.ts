@@ -1,6 +1,8 @@
 import { Type, type Static } from "typebox";
-import { DIFF, type ScoutReading } from "./prompt.ts";
+import { DIFF, SINCE, type ScoutFinding, type ScoutReading } from "./prompt.ts";
 import { prose } from "./prose.ts";
+import { MAX_DETAIL, MAX_FIELD } from "./history.ts";
+import { clip, oneLine } from "./text.ts";
 import type { ReviewSubmission } from "./verdict.ts";
 
 export const ScoutSubmission = Type.Object(
@@ -30,11 +32,30 @@ export interface ScoutRequest {
   repo: string;
   pr: number;
   diffLines: number;
+  /** since is set when the scout read an earlier head: SINCE's changed lines and what it found then. */
+  since?: { lines: number; findings: readonly ScoutFinding[] };
 }
 
-/** scoutPrompt asks one scout for an independent, decision-free reading of the diff. */
+const MAX_EARLIER = 25;
+
+/** earlier lists a scout's previous findings, one line each, for its next reading. */
+const earlier = (findings: readonly ScoutFinding[]): string =>
+  findings.length === 0
+    ? "  (nothing)"
+    : findings
+        .slice(0, MAX_EARLIER)
+        .map((f) => `  ${clip(oneLine(f.severity), MAX_FIELD)} ${clip(oneLine(f.file), MAX_FIELD)}:${f.line} — ${clip(oneLine(f.detail), MAX_DETAIL)}`)
+        .join("\n");
+
+/**
+ * scoutPrompt asks one scout for an independent, decision-free reading of the diff, or,
+ * when it read an earlier head, of what changed since then in the light of the whole diff.
+ */
 export function scoutPrompt(req: ScoutRequest): string {
-  return prose("scout", { repo: req.repo, pr: req.pr, diff: DIFF, lines: req.diffLines });
+  const step = req.since
+    ? prose("scout-since", { earlier: earlier(req.since.findings), since: SINCE, sinceLines: req.since.lines, diff: DIFF, lines: req.diffLines })
+    : prose("scout-diff", { diff: DIFF, lines: req.diffLines });
+  return prose("scout", { repo: req.repo, pr: req.pr, step, counted: req.since ? `${SINCE}'s` : "the diff's" });
 }
 
 /** readingOf turns a scout's submission, or the reason it has none, into what the review is shown. */

@@ -4,14 +4,16 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, write
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 import { all, client, type GitHub } from "./github.ts";
 import type { PriorThread } from "./history.ts";
-import { DIFF, INTENT, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
+import { DIFF, INTENT, SINCE, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
 import { MARKER } from "./render.ts";
-import { run, sha256 } from "./run.ts";
+import { hasSession, run, sha256 } from "./run.ts";
 import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
-import { readingOf, settleByScouts } from "./scout.ts";
+import { readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath } from "./text.ts";
 
@@ -219,9 +221,10 @@ export function changedLines(diff: string): number {
 }
 
 /** lay writes what the prompts name into work: the diff, the guidelines file at the base as the standards, and the pull request's intent. */
-function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: number; hasStandards: boolean } {
+function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: number; hasStandards: boolean; base: string } {
   const tree = path.join(work, TREE);
-  const diff = git(tree, "diff", "--no-ext-diff", `${git(tree, "merge-base", pull.base.sha, pull.head.sha).trim()}..${pull.head.sha}`);
+  const base = git(tree, "merge-base", pull.base.sha, pull.head.sha).trim();
+  const diff = git(tree, "diff", "--no-ext-diff", `${base}..${pull.head.sha}`);
   writeFileSync(path.join(work, DIFF), diff);
   let standards = "";
   try {
@@ -229,7 +232,69 @@ function lay(work: string, pull: any, guidelines = "REVIEW.md"): { diffLines: nu
   } catch {}
   if (standards) writeFileSync(path.join(work, STANDARDS), standards);
   writeFileSync(path.join(work, INTENT), `# ${pull.title}\n\n${pull.body ?? ""}\n`);
-  return { diffLines: changedLines(diff), hasStandards: standards !== "" };
+  return { diffLines: changedLines(diff), hasStandards: standards !== "", base };
+}
+
+/** SCOUTED is the file in a review session that records what each scout last read. */
+const SCOUTED = "scouts.json";
+const Sha = Type.String({ pattern: "^[0-9a-f]{40}([0-9a-f]{24})?$" });
+const Scouted = Type.Object({ head: Sha, base: Sha, readings: Type.Record(Type.String(), ScoutSubmission) }, { additionalProperties: false });
+export type Scouted = Static<typeof Scouted>;
+
+/** lastScouted is what the scouts read at the last review in a restored session, or undefined when there is none. */
+export function lastScouted(sessionDir?: string): Scouted | undefined {
+  if (!sessionDir || !hasSession(sessionDir)) return undefined;
+  try {
+    const s: unknown = JSON.parse(readFileSync(path.join(sessionDir, SCOUTED), "utf8"));
+    return Value.Check(Scouted, s) ? s : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * changesSince is the pull request's diff from last.head to head, with last.head first rebased
+ * onto base so that what the base branch brought in is left out. It is undefined when last.head
+ * is not in the tree or does not rebase cleanly, as after a force-push.
+ */
+export function changesSince(tree: string, last: Scouted, base: string, head: string): string | undefined {
+  try {
+    const rebased = git(tree, "merge-tree", "--write-tree", `--merge-base=${last.base}`, base, last.head).split("\n")[0];
+    return git(tree, "diff", "--no-ext-diff", rebased, head);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * scout gets a reading from each scout model. When sessionDir holds what the scouts read at an
+ * earlier head and what changed since is at most half the diff, a scout that read that head
+ * reads only the change (SINCE) along with what it found then, or keeps its reading when nothing
+ * changed; every other scout reads the whole diff. since says whether any reading built on an
+ * earlier one. What each scout read is kept in sessionDir for the next push.
+ */
+export async function scout(o: { models: string[]; request: ScoutRequest; work: string; out: string; sessionDir?: string; base: string; head: string; thinking: string; timeoutMs: number; transcript: boolean }): Promise<{ readings: ScoutReading[]; since: boolean }> {
+  const last = lastScouted(o.sessionDir);
+  const diff = last && changesSince(path.join(o.work, TREE), last, o.base, o.head);
+  const lines = diff === undefined ? undefined : changedLines(diff);
+  const since = lines !== undefined && lines * 2 <= o.request.diffLines;
+  if (since && lines > 0) writeFileSync(path.join(o.work, SINCE), diff!);
+  const got = await Promise.all(
+    o.models.map(async (model, i): Promise<ScoutSubmission | string> => {
+      const earlier = since ? last!.readings[model] : undefined;
+      if (earlier && lines === 0) return earlier;
+      const dir = path.join(o.out, `scout-${i}`);
+      const request = earlier ? { ...o.request, since: { lines: lines!, findings: earlier.findings } } : o.request;
+      await run({ role: "scout", request, outDir: dir, model, thinking: o.thinking, timeoutMs: o.timeoutMs, transcript: o.transcript });
+      return (submitted(dir) as ScoutSubmission | undefined) ?? failed(dir);
+    }),
+  );
+  if (o.sessionDir) {
+    const readings = Object.fromEntries(o.models.flatMap((m, i) => (Value.Check(ScoutSubmission, got[i]) && got[i].read > 0 ? [[m, got[i]]] : [])));
+    mkdirSync(o.sessionDir, { recursive: true });
+    writeFileSync(path.join(o.sessionDir, SCOUTED), JSON.stringify({ head: o.head, base: o.base, readings }));
+  }
+  return { readings: o.models.map((m, i) => readingOf(m, got[i])), since: since && o.models.some((m) => last!.readings[m]) };
 }
 
 /** keepsTranscripts is whether the runs keep their transcripts: only for a repository known to be private, since anyone can read a public one's artifacts. */
@@ -366,22 +431,17 @@ async function review(o: Record<string, string>): Promise<void> {
   const work = path.resolve(o.work);
   const guidelines = guidelinesPath(o["guidelines-file"]);
   if (o["guidelines-file"] && guidelines !== o["guidelines-file"]) console.log(`::warning::guidelines-file ${o["guidelines-file"]} is not a plain repository path; reading REVIEW.md instead`);
-  const { diffLines, hasStandards } = lay(work, pull, guidelines);
+  const { diffLines, hasStandards, base } = lay(work, pull, guidelines);
   recordInputs(o.out, work, pull);
   const home = shellHome(o, work);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
   const transcript = keepsTranscripts(o);
 
-  const scouts: ScoutReading[] = await Promise.all(
-    lines(o["scout-models"]).map(async (model, i) => {
-      const dir = path.join(o.out, `scout-${i}`);
-      await run({ role: "scout", request: { repo: `${owner}/${repo}`, pr, diffLines }, outDir: dir, model, thinking: o.thinking, timeoutMs, transcript });
-      return readingOf(model, (submitted(dir) as any) ?? failed(dir));
-    }),
-  );
-  // A request with text of its own goes to the review, the only role that reads it.
-  const settled = o.ask ? undefined : settleByScouts(scouts, diffLines);
+  const sessionDir = o["session-dir"] || undefined;
+  const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
+  // A request with text of its own goes to the review, the only role that reads it, and only readings of the whole diff settle one.
+  const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
   const includeNits = pull.labels.some((l: { name: string }) => l.name === o["nitpick-label"]);
   let outcome: unknown;
   if (settled) {
@@ -390,7 +450,7 @@ async function review(o: Record<string, string>): Promise<void> {
     const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
     const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
     const dir = path.join(o.out, "review");
-    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir: o["session-dir"] || undefined, home, transcript });
+    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
     const s = submitted(dir);
     outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
   }
