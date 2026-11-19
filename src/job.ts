@@ -446,7 +446,7 @@ async function review(o: Record<string, string>): Promise<void> {
 
   const sessionDir = o["session-dir"] || undefined;
   const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
-  // A request with text of its own goes to the review, the only role that reads it, and only readings of the whole diff settle one.
+  // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
   const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
   const includeNits = pull.labels.some((l: { name: string }) => l.name === o["nitpick-label"]);
   let outcome: unknown;
