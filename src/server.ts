@@ -213,7 +213,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       };
       const url = (await must(answer(), "post the reply")).html_url;
       const runs = runStats(body.runs);
-      recordRuns(m, runs);
+      recordRuns(m, claims.repository, runs);
       const answered = runs.find((r) => r.role === "reply")?.submitted;
       m.replies.inc({ repo: claims.repository, answered: answered === undefined ? "unknown" : String(answered) });
       return { url };
@@ -313,7 +313,7 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
     for (const [s, n] of Object.entries(severity)) m.findings.inc({ repo, mode, severity: s }, n);
   }
   for (const [placement, n] of [["inline", report.inline], ["file", report.file], ["unplaced", report.unplaced]] as const) m.placed.inc({ repo, placement }, n);
-  recordRuns(m, runStats(body.runs));
+  recordRuns(m, repo, runStats(body.runs));
 }
 
 /** outcomeOf rebuilds the verdict on the service's side: the contract is checked again and Accepted conditions come from the guidelines file at the base commit. */

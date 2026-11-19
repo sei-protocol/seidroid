@@ -156,11 +156,11 @@ test("publish records the review and the job's model runs in the metrics, and co
       'seidroid_review_duration_seconds_sum{repo="sei-protocol/sei-chain",mode="shadow"} 90',
       'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="suggestion"} 2',
       'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="nit"} 0',
-      'seidroid_model_runs_total{role="scout",model="openai/gpt-6.1-sol",result="submitted"} 1',
-      'seidroid_model_runs_total{role="review",model="other",result="timeout"} 1',
-      'seidroid_model_tokens_total{role="review",model="other",kind="input"} 1000000000',
-      'seidroid_model_cost_usd_total{role="scout",model="openai/gpt-6.1-sol"} 0.25',
-      'seidroid_shell_commands_total{role="review",result="failed"} 2',
+      'seidroid_model_runs_total{repo="sei-protocol/sei-chain",role="scout",model="openai/gpt-6.1-sol",result="submitted"} 1',
+      'seidroid_model_runs_total{repo="sei-protocol/sei-chain",role="review",model="other",result="timeout"} 1',
+      'seidroid_model_tokens_total{repo="sei-protocol/sei-chain",role="review",model="other",kind="input"} 1000000000',
+      'seidroid_model_cost_usd_total{repo="sei-protocol/sei-chain",role="scout",model="openai/gpt-6.1-sol"} 0.25',
+      'seidroid_shell_commands_total{repo="sei-protocol/sei-chain",role="review",result="failed"} 2',
       'seidroid_comparisons_total{repo="sei-protocol/sei-chain",v1="block",v2="pass"} 1',
       'seidroid_compared_findings_sum{repo="sei-protocol/sei-chain",reviewer="v1"} 2',
       'seidroid_compared_findings_sum{repo="sei-protocol/sei-chain",reviewer="v2"} 2',
@@ -323,7 +323,7 @@ test("reply answers the asker's own comment in its thread, as the App", async ()
     const m = await s.metrics();
     assert.match(m, /seidroid_replies_total\{repo="sei-protocol\/sei-chain",answered="true"\} 1\n/);
     assert.match(m, /seidroid_replies_total\{repo="sei-protocol\/sei-chain",answered="unknown"\} 1\n/);
-    assert.match(m, /seidroid_model_runs_total\{role="reply",model="m",result="submitted"\} 1\n/);
+    assert.match(m, /seidroid_model_runs_total\{repo="sei-protocol\/sei-chain",role="reply",model="m",result="submitted"\} 1\n/);
     assert.deepEqual(posted.map(([where]) => where), ["conversation", "thread"]);
     assert.match(posted[0]![1], /^<!-- seidroid-reply -->\nBecause\.\n\n<sub>seidroid v2 · \[run\]\(https:\/\/github\.com\/sei-protocol\/sei-chain\/actions\/runs\/9\/attempts\/2\)<\/sub>$/);
     const refused: [unknown, Claims, number][] = [

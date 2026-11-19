@@ -48,12 +48,12 @@ export function metrics() {
     findings: counter("seidroid_findings_total", "Findings reviews reported, by repository, mode and severity.", ["repo", "mode", "severity"]),
     placed: counter("seidroid_findings_placed_total", "Findings published, by repository and where they landed.", ["repo", "placement"]),
     replies: counter("seidroid_replies_total", "Replies posted, by repository and whether the model answered.", ["repo", "answered"]),
-    runs: counter("seidroid_model_runs_total", "Model runs, by role, model and result.", ["role", "model", "result"]),
-    tokens: counter("seidroid_model_tokens_total", "Tokens model runs used, by role, model and kind.", ["role", "model", "kind"]),
-    cost: counter("seidroid_model_cost_usd_total", "What model runs cost in US dollars, as pi prices them, by role and model.", ["role", "model"]),
-    turns: histogram("seidroid_model_turns", "Assistant turns per model run, by role and model.", ["role", "model"], [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]),
-    runSeconds: histogram("seidroid_model_run_duration_seconds", "Time per model run, by role and model.", ["role", "model"], SECONDS),
-    commands: counter("seidroid_shell_commands_total", "Shell commands model runs ran, by role and result.", ["role", "result"]),
+    runs: counter("seidroid_model_runs_total", "Model runs, by repository, role, model and result.", ["repo", "role", "model", "result"]),
+    tokens: counter("seidroid_model_tokens_total", "Tokens model runs used, by repository, role, model and kind.", ["repo", "role", "model", "kind"]),
+    cost: counter("seidroid_model_cost_usd_total", "What model runs cost in US dollars, as pi prices them, by repository, role and model.", ["repo", "role", "model"]),
+    turns: histogram("seidroid_model_turns", "Assistant turns per model run, by repository, role and model.", ["repo", "role", "model"], [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]),
+    runSeconds: histogram("seidroid_model_run_duration_seconds", "Time per model run, by repository, role and model.", ["repo", "role", "model"], SECONDS),
+    commands: counter("seidroid_shell_commands_total", "Shell commands model runs ran, by repository, role and result.", ["repo", "role", "result"]),
     compared: counter("seidroid_comparisons_total", "Commits both v1 and v2 were asked to review, by repository and each one's verdict; v1 is missing when it never reviewed the commit.", ["repo", "v1", "v2"]),
     comparedFindings: histogram("seidroid_compared_findings", "Findings per commit both v1 and v2 reviewed, by repository and reviewer.", ["repo", "reviewer"], COUNTS),
     comparedSeconds: histogram("seidroid_compared_duration_seconds", "Review job time per commit both v1 and v2 reviewed and timed, by repository and reviewer.", ["repo", "reviewer"], SECONDS),
@@ -104,17 +104,17 @@ export function failureReason(failure: string): string {
   return "other";
 }
 
-/** recordRuns adds a job's model runs to m. */
-export function recordRuns(m: Metrics, runs: readonly RunStats[]): void {
+/** recordRuns adds a job's model runs in repo to m. */
+export function recordRuns(m: Metrics, repo: string, runs: readonly RunStats[]): void {
   for (const r of runs) {
-    const l = { role: r.role, model: r.model };
+    const l = { repo, role: r.role, model: r.model };
     m.runs.inc({ ...l, result: runResult(r) });
     for (const [kind, v] of [["input", r.input], ["output", r.output], ["cache_read", r.cacheRead], ["cache_write", r.cacheWrite]] as const) m.tokens.inc({ ...l, kind }, v);
     m.cost.inc(l, r.cost);
     m.turns.observe(l, r.turns);
     m.runSeconds.observe(l, r.durationMs / 1000);
-    m.commands.inc({ role: r.role, result: "ok" }, Math.max(0, r.commands - r.failedCommands));
-    m.commands.inc({ role: r.role, result: "failed" }, Math.min(r.commands, r.failedCommands));
+    m.commands.inc({ repo, role: r.role, result: "ok" }, Math.max(0, r.commands - r.failedCommands));
+    m.commands.inc({ repo, role: r.role, result: "failed" }, Math.min(r.commands, r.failedCommands));
   }
 }
 
