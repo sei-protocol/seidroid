@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, recordInputs, requested, runsIn, scout, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, readsSince, recordInputs, requested, runsIn, scout, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -330,4 +330,10 @@ test("scout keeps a reading when nothing changed since it, and records the new h
   assert.equal(got.since, true);
   assert.deepEqual(got.readings, [{ name: "m", note: "", ...reading }]);
   assert.deepEqual(JSON.parse(readFileSync(path.join(sessionDir, "scouts.json"), "utf8")), { head: h.head, base: h.moved, readings: { m: reading } });
+});
+
+test("readsSince only for a change that is small next to the diff and on its own", () => {
+  for (const [changed, diffLines, want] of [[0, 1, true], [25, 100, true], [26, 100, false], [400, 4000, true], [401, 4000, false], [1089, 2495, false]] as const) {
+    assert.equal(readsSince(changed, diffLines), want, `${changed} of ${diffLines}`);
+  }
 });

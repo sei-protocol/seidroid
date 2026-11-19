@@ -266,18 +266,24 @@ export function changesSince(tree: string, last: Scouted, base: string, head: st
   }
 }
 
+/** MAX_SINCE is the most changed lines a scout reads on their own rather than reading the whole diff again. */
+const MAX_SINCE = 400;
+
+/** readsSince is whether a scout reads only a change of changed lines rather than all diffLines again: when it is small on its own and next to the diff. */
+export const readsSince = (changed: number, diffLines: number): boolean => changed <= Math.min(MAX_SINCE, diffLines / 4);
+
 /**
  * scout gets a reading from each scout model. When sessionDir holds what the scouts read at an
- * earlier head and what changed since is at most half the diff, a scout that read that head
- * reads only the change (SINCE) along with what it found then, or keeps its reading when nothing
- * changed; every other scout reads the whole diff. since says whether any reading built on an
+ * earlier head and readsSince what changed since, a scout that read that head reads only the
+ * change (SINCE) along with what it found then, or keeps its reading when nothing changed; every
+ * other scout reads the whole diff. since says whether any reading built on an
  * earlier one. What each scout read is kept in sessionDir for the next push.
  */
 export async function scout(o: { models: string[]; request: ScoutRequest; work: string; out: string; sessionDir?: string; base: string; head: string; thinking: string; timeoutMs: number; transcript: boolean }): Promise<{ readings: ScoutReading[]; since: boolean }> {
   const last = lastScouted(o.sessionDir);
   const diff = last && changesSince(path.join(o.work, TREE), last, o.base, o.head);
   const lines = diff === undefined ? undefined : changedLines(diff);
-  const since = lines !== undefined && lines * 2 <= o.request.diffLines;
+  const since = lines !== undefined && readsSince(lines, o.request.diffLines);
   if (since && lines > 0) writeFileSync(path.join(o.work, SINCE), diff!);
   const got = await Promise.all(
     o.models.map(async (model, i): Promise<ScoutSubmission | string> => {
