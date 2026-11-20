@@ -44,7 +44,7 @@ export interface Report {
 
 const EVENT = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 const DISMISSAL = "Superseded: the latest review found nothing blocking in this change.";
-const WITHDRAWAL = "Withdrawn: the head moved while this approval was posted, so it does not cover the newer commits.";
+const WITHDRAWAL = "Withdrawn: the head moved, or could not be read, while this approval was posted, so it does not cover the newer commits.";
 /** NEAR is how many lines apart a finding and an open thread on the same side of a file may be and still carry the same finding. */
 const NEAR = 3;
 const MAX_FILES = 3_000;
@@ -115,7 +115,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
     }
     await must(res, "post the review");
     if (res.data?.state === "APPROVED") report.moved = await withdrawIfMoved(gh, base, t, res.data.id);
-    if (!moved) await resolveThreads(gh, plan, own, landed, new Set(repeats.values()), report);
+    if (!report.moved) await resolveThreads(gh, plan, own, landed, new Set(repeats.values()), report);
     await clearNotices(gh, base, t);
   }
 
@@ -161,43 +161,48 @@ async function diffFiles(gh: GitHub, base: string, t: Target, pr: Pull): Promise
 }
 
 /**
- * withdrawIfMoved dismisses the approval just posted when the head moved while it was posted, so it
- * never stands for commits the review did not read, and returns the head it moved to.
+ * withdrawIfMoved dismisses the approval just posted unless the head is still the commit reviewed, so it never
+ * stands for commits the review did not read, and returns the head it moved to. A dismissal that fails throws.
  */
 async function withdrawIfMoved(gh: GitHub, base: string, t: Target, review: number): Promise<string> {
-  const { head } = await readPull(gh, base, t);
-  if (head.sha === t.head) return "";
-  const res = await gh.rest("PUT", `${base}/pulls/${t.pr}/reviews/${review}/dismissals`, { message: WITHDRAWAL, event: "DISMISS" });
-  if (res.status !== 200) console.warn(`could not withdraw the approval of ${t.head}: ${res.status} ${res.data?.message ?? ""}`);
-  return head.sha;
+  const pr = await gh.rest<Pull>("GET", `${base}/pulls/${t.pr}`);
+  const head = pr.status === 200 ? pr.data.head.sha : "unknown";
+  if (head === t.head) return "";
+  await must(gh.rest("PUT", `${base}/pulls/${t.pr}/reviews/${review}/dismissals`, { message: WITHDRAWAL, event: "DISMISS" }), `withdraw the approval of ${t.head}`);
+  return head;
 }
 
 /**
- * repeatsOf pairs each finding with the open thread of this App's that already carries it, one finding
- * to a thread: first a thread on its file with the same detail, then the nearest within NEAR lines on
- * its side. Threads the review says are addressed carry nothing.
+ * repeatsOf pairs each finding with the open, current thread of this App's that already carries it, one
+ * finding to a thread on its file: first a thread it supersedes within NEAR lines on its side, then one
+ * with the same detail, then the nearest within NEAR lines. Threads the review says are addressed carry
+ * nothing, and those a finding supersedes carry only that finding: further away it opens a new thread
+ * and the old one is resolved.
  */
 function repeatsOf(findings: readonly Finding[], own: ReadonlyMap<string, OwnThread>, addressed: ReadonlySet<string>): Map<Finding, string> {
   const out = new Map<Finding, string>();
-  const open = [...own].filter(([id]) => !addressed.has(id));
-  const take = (f: Finding, score: (th: OwnThread) => number) => {
-    let best: [string, number] | undefined;
-    for (const [id, th] of open) {
-      const s = th.path === f.file ? score(th) : Infinity;
-      if (s < (best?.[1] ?? Infinity)) best = [id, s];
+  const open = [...own].filter(([id, th]) => !addressed.has(id) && !th.outdated);
+  const pass = (score: (f: Finding, id: string, th: OwnThread) => number) => {
+    for (const f of findings) {
+      if (out.has(f)) continue;
+      let best: [string, number] | undefined;
+      for (const [id, th] of open) {
+        const s = th.path === f.file ? score(f, id, th) : Infinity;
+        if (s < (best?.[1] ?? Infinity)) best = [id, s];
+      }
+      if (!best) continue;
+      out.set(f, best[0]);
+      open.splice(open.findIndex(([id]) => id === best[0]), 1);
     }
-    if (!best) return;
-    out.set(f, best[0]);
-    open.splice(open.findIndex(([id]) => id === best[0]), 1);
   };
-  for (const f of findings) take(f, (th) => (th.detail !== "" && th.detail === f.detail ? 0 : Infinity));
-  for (const f of findings) {
-    if (out.has(f)) continue;
-    take(f, (th) => {
-      const gap = th.side === f.side ? Math.min(...[th.line, th.originalLine].map((l) => (l === null ? Infinity : Math.abs(l - f.line)))) : Infinity;
-      return gap <= NEAR ? gap : Infinity;
-    });
-  }
+  const near = (f: Finding, th: OwnThread) => {
+    const gap = th.side === f.side && th.line !== null ? Math.abs(th.line - f.line) : Infinity;
+    return gap <= NEAR ? gap : Infinity;
+  };
+  const superseded = new Set(findings.flatMap((f) => f.supersedes));
+  pass((f, id, th) => (f.supersedes.includes(id) ? near(f, th) : Infinity));
+  pass((f, id, th) => (!superseded.has(id) && th.detail !== "" && th.detail === f.detail ? 0 : Infinity));
+  pass((f, id, th) => (superseded.has(id) ? Infinity : near(f, th)));
   return out;
 }
 
@@ -240,7 +245,7 @@ async function placeAlone(gh: GitHub, base: string, t: Target, f: Finding, tryLi
 const OWN_THREADS = `query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
   repository(owner: $owner, name: $repo) { pullRequest(number: $pr) { reviewThreads(first: 100, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes { id isResolved path line originalLine diffSide comments(first: 1) { nodes { body author { login } } } }
+    nodes { id isResolved isOutdated path line diffSide comments(first: 1) { nodes { body author { login } } } }
   } } }
 }`;
 
@@ -253,7 +258,7 @@ interface OwnThread {
   path: string;
   /** On the current head, or null once outdated or on the whole file. */
   line: number | null;
-  originalLine: number | null;
+  outdated: boolean;
   side: Finding["side"];
 }
 
@@ -264,10 +269,10 @@ async function ownThreads(gh: GitHub, t: Target): Promise<Map<string, OwnThread>
   for (let page = 0; page < 10; page++) {
     const data: any = await gh.graphql(OWN_THREADS, { owner: t.owner, repo: t.repo, pr: t.pr, after });
     const threads = data.repository.pullRequest.reviewThreads;
-    for (const th of threads.nodes as { id: string; isResolved: boolean; path: string; line: number | null; originalLine: number | null; diffSide: string; comments: { nodes: { body: string; author: { login: string } | null }[] } }[]) {
+    for (const th of threads.nodes as { id: string; isResolved: boolean; isOutdated: boolean; path: string; line: number | null; diffSide: string; comments: { nodes: { body: string; author: { login: string } | null }[] } }[]) {
       const first = th.comments.nodes[0];
       if (th.isResolved || !first || login(first.author?.login ?? "") !== login(t.bot) || !first.body.startsWith(MARKER.finding)) continue;
-      own.set(th.id, { body: first.body, detail: findingDetail(first.body), path: th.path, line: th.line ?? null, originalLine: th.originalLine ?? null, side: th.diffSide === "LEFT" ? "LEFT" : "RIGHT" });
+      own.set(th.id, { body: first.body, detail: findingDetail(first.body), path: th.path, line: th.line ?? null, outdated: th.isOutdated === true, side: th.diffSide === "LEFT" ? "LEFT" : "RIGHT" });
     }
     if (!threads.pageInfo.hasNextPage) break;
     after = threads.pageInfo.endCursor;

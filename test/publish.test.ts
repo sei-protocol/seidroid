@@ -11,7 +11,7 @@ const patch = "@@ -1,2 +1,3 @@\n a\n+b\n c";
 type Route = (body: any) => Response;
 
 /** fake answers GitHub calls from routes keyed "METHOD path" (the query string dropped) and records every call. */
-type Thread = { id: string; body: string; login?: string; resolved?: boolean; path?: string; line?: number | null; originalLine?: number | null; side?: string };
+type Thread = { id: string; body: string; login?: string; resolved?: boolean; path?: string; line?: number | null; outdated?: boolean; side?: string };
 
 function fake(routes: Record<string, Route>, threads: Thread[] = [], replyFails = false) {
   const calls: { key: string; body: any }[] = [];
@@ -39,7 +39,7 @@ function fake(routes: Record<string, Route>, threads: Thread[] = [], replyFails 
       if (key === "reply" && replyFails) throw new Error("graphql: 502");
       if (key !== "threads") return {};
       const nodes = threads.map((th) => ({
-        id: th.id, isResolved: th.resolved ?? false, path: th.path ?? "a.go", line: th.line === undefined ? 2 : th.line, originalLine: th.originalLine ?? null, diffSide: th.side ?? "RIGHT",
+        id: th.id, isResolved: th.resolved ?? false, isOutdated: th.outdated ?? false, path: th.path ?? "a.go", line: th.line === undefined ? 2 : th.line, diffSide: th.side ?? "RIGHT",
         comments: { nodes: [{ body: th.body, author: { login: th.login ?? "seidroid" } }] },
       }));
       return { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes } } } };
@@ -116,8 +116,9 @@ test("publish resolves only its own threads, superseded ones once the restatemen
     { id: "T4", body: `${MARKER.finding}\n**nit** — human`, login: "mallory" },
     { id: "T5", body: `${MARKER.finding}\n**nit** — gone`, line: 40 },
   ]);
-  const v = verdict({ inline_comments: [comment({ severity: "suggestion", supersedes_thread_ids: ["T1"] }), comment({ line: 9, supersedes_thread_ids: ["T5"] })], resolved_thread_ids: ["T3", "T4"] });
+  const v = verdict({ inline_comments: [comment({ severity: "suggestion", supersedes_thread_ids: ["T1"] }), comment({ line: 9, supersedes_thread_ids: ["T5"] }), comment({ line: 41, body: "near T5" })], resolved_thread_ids: ["T3", "T4"] });
   const r = await publish(gh, T, { verdict: v });
+  assert.equal(of("reply").length, 0);
   assert.deepEqual(r.resolved.sort(), ["T1", "T2", "T3", "T5"]);
   assert.deepEqual(of("resolve").map((b: any) => b.id).sort(), ["T1", "T2", "T3", "T5"]);
 });
@@ -205,21 +206,24 @@ test("publish only comments on a clean review unless it may approve, and still r
 test("publish restates a finding in its own open thread that carries it instead of opening another", async () => {
   const { gh, of } = fake({}, [
     { id: "SAME", body: `${MARKER.finding}\n**suggestion** — b panics\n\n_Cited at \`a.go:40\`, outside this diff's changed lines._`, line: null },
-    { id: "NEAR", body: `${MARKER.finding}\n**blocker** — reads count as admission`, line: null, originalLine: 6 },
+    { id: "NEAR", body: `${MARKER.finding}\n**blocker** — reads count as admission`, line: 5 },
+    { id: "OLD", body: `${MARKER.finding}\n**blocker** — e leaks`, line: null, outdated: true },
+    { id: "WANT", body: `${MARKER.finding}\n**blocker** — g leaks`, line: 30 },
     { id: "BOT", body: `${MARKER.finding}\n**blocker** — c leaks`, login: "other-bot" },
     { id: "LEFT", body: `${MARKER.finding}\n**blocker** — d leaks`, side: "LEFT" },
     { id: "FAR", body: `${MARKER.finding}\n**blocker** — d leaks`, line: 9 },
   ]);
   const v = verdict({
-    inline_comments: [comment(), comment({ line: 3, body: "reads are admission", supersedes_thread_ids: ["NEAR"] }), comment({ body: "c leaks" })],
+    inline_comments: [comment(), comment({ line: 31, body: "h leaks" }), comment({ line: 29, body: "g is shared", supersedes_thread_ids: ["WANT"] }),
+      comment({ line: 3, body: "reads are admission", supersedes_thread_ids: ["NEAR"] }), comment({ body: "c leaks" }), comment({ line: 30, body: "e leaks" })],
   });
   const r = await publish(gh, T, { verdict: v });
-  assert.deepEqual(of("reply").map((b: any) => b.id), ["SAME", "NEAR"]);
-  assert.match(of("reply")[0].body, /^\*\*blocker\*\* — b panics\n\n_The review of `abc` finds this again at `a.go:2`._$/);
-  assert.deepEqual(of("POST /repos/o/r/pulls/7/reviews")[0].comments.map((c: any) => c.body), [`${MARKER.finding}\n**blocker** — c leaks`]);
-  assert.equal(of("POST /repos/o/r/pulls/7/comments").length, 0);
+  assert.deepEqual(of("reply").map((b: any) => b.id), ["WANT", "NEAR", "SAME"]);
+  assert.match(of("reply")[2].body, /^\*\*blocker\*\* — b panics\n\n_The review of `abc` finds this again at `a.go:2`._$/);
+  assert.deepEqual(of("POST /repos/o/r/pulls/7/reviews")[0].comments.map((c: any) => c.body.split(" — ")[1]), ["c leaks"]);
+  assert.deepEqual(of("POST /repos/o/r/pulls/7/comments").map((c: any) => c.body.split(" — ")[1].split("\n")[0]), ["h leaks", "e leaks"]);
   assert.deepEqual(r.resolved, []);
-  assert.deepEqual({ replied: r.replied, inline: r.inline, unplaced: r.unplaced }, { replied: 2, inline: 1, unplaced: 0 });
+  assert.deepEqual({ replied: r.replied, inline: r.inline, unplaced: r.unplaced }, { replied: 3, inline: 1, unplaced: 0 });
 });
 
 test("publish opens no thread for a finding whose reply may not have landed, and replies nowhere in shadow", async () => {
@@ -256,19 +260,34 @@ test("publish posts nothing on the code and never approves once the head has mov
   assert.deepEqual(blocked.of("POST /repos/o/r/pulls/7/reviews").map((x: any) => [x.event, x.comments.length]), [["REQUEST_CHANGES", 0]]);
 });
 
-test("publish withdraws an approval when the head moved while it was posted", async () => {
-  const heads = ["abc", "def"];
-  const { gh, of } = fake({
-    "GET /repos/o/r/pulls/7": () => ({ status: 200, data: { changed_files: 1, head: { sha: heads.shift() ?? "def" } } }),
+test("publish withdraws an approval, and resolves nothing, when the head moved or went unread while it was posted", async () => {
+  const approving = (heads: (string | null)[], dismissal = 200) => fake({
+    "GET /repos/o/r/pulls/7": () => {
+      const sha = heads.length ? heads.shift()! : "def";
+      return sha === null ? { status: 502, data: {} } : { status: 200, data: { changed_files: 1, head: { sha } } };
+    },
     "POST /repos/o/r/pulls/7/reviews": () => ({ status: 200, data: { id: 9, state: "APPROVED" } }),
-    "PUT /repos/o/r/pulls/7/reviews/:id/dismissals": () => ({ status: 200, data: {} }),
-  });
-  const r = await publish(gh, T, { verdict: verdict({}) });
-  assert.equal(of("POST /repos/o/r/pulls/7/reviews")[0].event, "APPROVE");
-  assert.match(of("PUT /repos/o/r/pulls/7/reviews/9/dismissals")[0].message, /^Withdrawn: the head moved/);
-  assert.deepEqual({ moved: r.moved, dismissed: r.dismissed }, { moved: "def", dismissed: 0 });
+    "PUT /repos/o/r/pulls/7/reviews/:id/dismissals": () => ({ status: dismissal, data: { message: "no" } }),
+  }, [{ id: "T1", body: `${MARKER.finding}\n**blocker** — old` }]);
+  const addressed = verdict({ resolved_thread_ids: ["T1"] });
 
-  const still = fake({ "POST /repos/o/r/pulls/7/reviews": () => ({ status: 200, data: { id: 9, state: "APPROVED" } }) });
-  assert.equal((await publish(still.gh, T, { verdict: verdict({}) })).moved, "");
+  const moved = approving(["abc", "def"]);
+  const r = await publish(moved.gh, T, { verdict: addressed });
+  assert.equal(moved.of("POST /repos/o/r/pulls/7/reviews")[0].event, "APPROVE");
+  assert.match(moved.of("PUT /repos/o/r/pulls/7/reviews/9/dismissals")[0].message, /^Withdrawn: the head moved/);
+  assert.equal(moved.of("resolve").length, 0);
+  assert.deepEqual({ moved: r.moved, dismissed: r.dismissed, resolved: r.resolved }, { moved: "def", dismissed: 0, resolved: [] });
+
+  const unread = approving(["abc", null]);
+  assert.equal((await publish(unread.gh, T, { verdict: addressed })).moved, "unknown");
+  assert.equal(unread.of("PUT /repos/o/r/pulls/7/reviews/9/dismissals").length, 1);
+
+  const refused = approving(["abc", "def"], 422);
+  await assert.rejects(publish(refused.gh, T, { verdict: addressed }), /could not withdraw the approval of abc: 422 no/);
+  assert.equal(refused.of("resolve").length, 0);
+
+  const still = approving(["abc", "abc"]);
+  assert.equal((await publish(still.gh, T, { verdict: addressed })).moved, "");
   assert.equal(still.of("PUT /repos/o/r/pulls/7/reviews/9/dismissals").length, 0);
+  assert.equal(still.of("resolve").length, 1);
 });
