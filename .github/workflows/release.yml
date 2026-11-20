@@ -81,7 +81,7 @@ jobs:
             type=raw,value=${{ needs.version.outputs.image }}
             type=raw,value=snapshot,enable=${{ github.ref == 'refs/heads/main' }}
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
