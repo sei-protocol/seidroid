@@ -38,12 +38,14 @@ export interface ScoutRequest {
 
 const MAX_EARLIER = 25;
 
+/** carriesOn is whether a scout's earlier findings are few enough to list in full for a since-reading. */
+export const carriesOn = (findings: readonly ScoutFinding[]): boolean => findings.length <= MAX_EARLIER;
+
 /** earlier lists a scout's previous findings, one line each, for its next reading. */
 const earlier = (findings: readonly ScoutFinding[]): string =>
   findings.length === 0
     ? "  (nothing)"
     : findings
-        .slice(0, MAX_EARLIER)
         .map((f) => `  ${clip(oneLine(f.severity), MAX_FIELD)} ${clip(oneLine(f.file), MAX_FIELD)}:${f.line} — ${clip(oneLine(f.detail), MAX_DETAIL)}`)
         .join("\n");
 

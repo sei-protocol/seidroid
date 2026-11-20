@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, readsSince, recordInputs, requested, runsIn, scout, scoutPlan, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, scout, scoutPlan, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -338,10 +338,17 @@ test("readsSince only for a change that is small next to the diff and on its own
   }
 });
 
-test("scoutPlan keeps a reading only when neither the pull request nor its base moved", () => {
+test("scoutPlan builds on a reading only on the same base", () => {
   const rename = "diff --git a/x b/y\nold mode 100644\nnew mode 100755\nsimilarity index 100%\nrename from x\nrename to y\n";
   const edit = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n";
-  for (const [diff, sameBase, want] of [[undefined, true, "whole"], ["", true, "keep"], ["", false, "whole"], [rename, true, "since"], [edit, false, "since"], [edit.repeat(30), true, "whole"]] as const) {
+  for (const [diff, sameBase, want] of [[undefined, true, "whole"], ["", true, "keep"], ["", false, "whole"], [rename, true, "since"], [edit, true, "since"], [edit, false, "whole"], [edit.repeat(30), true, "whole"]] as const) {
     assert.equal(scoutPlan(diff, sameBase, 10), want, `${JSON.stringify(diff)?.slice(0, 20)} sameBase=${sameBase}`);
+  }
+});
+
+test("readAll keeps only readings of everything the scout was asked to read", () => {
+  const got = (read: number) => ({ read, inert: false, findings: [] });
+  for (const [g, asked, want] of [[got(100), 100, true], [got(120), 100, true], [got(99), 100, false], [got(0), 0, false], [got(3), 0, true], ["it timed out", 0, false]] as const) {
+    assert.equal(readAll(g, asked), want, `${JSON.stringify(g)} of ${asked}`);
   }
 });

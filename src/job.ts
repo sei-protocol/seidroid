@@ -13,7 +13,7 @@ import { MARKER } from "./render.ts";
 import { hasSession, run, sha256 } from "./run.ts";
 import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
-import { readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
+import { carriesOn, readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
 import { clip, guidelinesPath } from "./text.ts";
 
@@ -274,45 +274,49 @@ export const readsSince = (changed: number, diffLines: number): boolean => chang
 
 /**
  * scoutPlan is how a scout that read an earlier head reads this one, given what changed since
- * (undefined when that is unknown) and whether the base is the one it read against: it keeps its
- * reading only when neither the pull request nor the base moved, reads the change on its own when
- * readsSince it, and otherwise reads the whole diff.
+ * (undefined when that is unknown) and whether the base is the one it read against: on the same
+ * base it keeps its reading when nothing changed and reads the change on its own when readsSince
+ * it; otherwise it reads the whole diff.
  */
 export function scoutPlan(diff: string | undefined, sameBase: boolean, diffLines: number): "keep" | "since" | "whole" {
-  if (diff === undefined) return "whole";
-  if (diff === "") return sameBase ? "keep" : "whole";
+  if (diff === undefined || !sameBase) return "whole";
+  if (diff === "") return "keep";
   return readsSince(changedLines(diff), diffLines) ? "since" : "whole";
 }
 
+/** readAll is whether got is a reading of at least the asked lines, so the next push can build on it. */
+export const readAll = (got: ScoutSubmission | string, asked: number): got is ScoutSubmission =>
+  Value.Check(ScoutSubmission, got) && got.read > 0 && got.read >= asked;
+
 /**
  * scout gets a reading from each scout model. When sessionDir holds what the scouts read at an
- * earlier head and readsSince what changed since, a scout that read that head reads only the
- * change (SINCE) along with what it found then, or keeps its reading as scoutPlan allows; every
- * other scout reads the whole diff. since says whether any reading built on an
- * earlier one. What each scout read is kept in sessionDir for the next push.
+ * earlier head, a scout that read that head keeps its reading or reads only the change (SINCE)
+ * along with what it found then, as scoutPlan allows and when carriesOn those findings; every
+ * other scout reads the whole diff. since says whether any reading built on an earlier one.
+ * Each reading of everything a scout was asked to read is kept in sessionDir for the next push.
  */
 export async function scout(o: { models: string[]; request: ScoutRequest; work: string; out: string; sessionDir?: string; base: string; head: string; thinking: string; timeoutMs: number; transcript: boolean }): Promise<{ readings: ScoutReading[]; since: boolean }> {
   const last = lastScouted(o.sessionDir);
   const diff = last && changesSince(path.join(o.work, TREE), last, o.base, o.head);
   const plan = last ? scoutPlan(diff, last.base === o.base, o.request.diffLines) : "whole";
   if (plan === "since") writeFileSync(path.join(o.work, SINCE), diff!);
-  const since = plan !== "whole";
-  const got = await Promise.all(
-    o.models.map(async (model, i): Promise<ScoutSubmission | string> => {
-      const earlier = since ? last!.readings[model] : undefined;
-      if (earlier && plan === "keep") return earlier;
+  const runs = await Promise.all(
+    o.models.map(async (model, i): Promise<{ got: ScoutSubmission | string; asked: number; since: boolean }> => {
+      const earlier = plan === "whole" ? undefined : last!.readings[model];
+      if (earlier && plan === "keep") return { got: earlier, asked: earlier.read, since: true };
+      const sinceLines = earlier && carriesOn(earlier.findings) ? Math.max(1, changedLines(diff!)) : undefined;
+      const request = sinceLines === undefined ? o.request : { ...o.request, since: { lines: sinceLines, findings: earlier!.findings } };
       const dir = path.join(o.out, `scout-${i}`);
-      const request = earlier ? { ...o.request, since: { lines: changedLines(diff!), findings: earlier.findings } } : o.request;
       await run({ role: "scout", request, outDir: dir, model, thinking: o.thinking, timeoutMs: o.timeoutMs, transcript: o.transcript });
-      return (submitted(dir) as ScoutSubmission | undefined) ?? failed(dir);
+      return { got: (submitted(dir) as ScoutSubmission | undefined) ?? failed(dir), asked: sinceLines ?? o.request.diffLines, since: sinceLines !== undefined };
     }),
   );
   if (o.sessionDir) {
-    const readings = Object.fromEntries(o.models.flatMap((m, i) => (Value.Check(ScoutSubmission, got[i]) && got[i].read > 0 ? [[m, got[i]]] : [])));
+    const readings = Object.fromEntries(o.models.flatMap((m, i) => (readAll(runs[i].got, runs[i].asked) ? [[m, runs[i].got]] : [])));
     mkdirSync(o.sessionDir, { recursive: true });
     writeFileSync(path.join(o.sessionDir, SCOUTED), JSON.stringify({ head: o.head, base: o.base, readings }));
   }
-  return { readings: o.models.map((m, i) => readingOf(m, got[i])), since: since && o.models.some((m) => last!.readings[m]) };
+  return { readings: o.models.map((m, i) => readingOf(m, runs[i].got)), since: runs.some((r) => r.since) };
 }
 
 /** keepsTranscripts is whether the runs keep their transcripts: only for a repository known to be private, since anyone can read a public one's artifacts. */

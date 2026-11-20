@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readingOf, scoutPrompt, settleByScouts } from "../src/scout.ts";
+import { carriesOn, readingOf, scoutPrompt, settleByScouts } from "../src/scout.ts";
 
 const inert = { read: 4, inert: true, findings: [] };
 
@@ -42,4 +42,10 @@ test("scoutPrompt with an earlier reading points at what changed and what it fou
   assert.match(p, /^  high a\.go:5 — x y$/m);
   assert.match(p, /read is since\.diff's line count/);
   assert.match(scoutPrompt({ repo: "o/r", pr: 3, diffLines: 10, since: { lines: 4, findings: [] } }), /^  \(nothing\)$/m);
+});
+
+test("carriesOn lists every earlier finding or none", () => {
+  const f = { file: "a.go", line: 1, severity: "low" as const, detail: "d" };
+  assert.equal(carriesOn(Array(25).fill(f)), true);
+  assert.equal(carriesOn(Array(26).fill(f)), false);
 });
