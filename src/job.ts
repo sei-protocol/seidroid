@@ -273,24 +273,36 @@ const MAX_SINCE = 400;
 export const readsSince = (changed: number, diffLines: number): boolean => changed <= Math.min(MAX_SINCE, diffLines / 4);
 
 /**
+ * scoutPlan is how a scout that read an earlier head reads this one, given what changed since
+ * (undefined when that is unknown) and whether the base is the one it read against: it keeps its
+ * reading only when neither the pull request nor the base moved, reads the change on its own when
+ * readsSince it, and otherwise reads the whole diff.
+ */
+export function scoutPlan(diff: string | undefined, sameBase: boolean, diffLines: number): "keep" | "since" | "whole" {
+  if (diff === undefined) return "whole";
+  if (diff === "") return sameBase ? "keep" : "whole";
+  return readsSince(changedLines(diff), diffLines) ? "since" : "whole";
+}
+
+/**
  * scout gets a reading from each scout model. When sessionDir holds what the scouts read at an
  * earlier head and readsSince what changed since, a scout that read that head reads only the
- * change (SINCE) along with what it found then, or keeps its reading when nothing changed; every
+ * change (SINCE) along with what it found then, or keeps its reading as scoutPlan allows; every
  * other scout reads the whole diff. since says whether any reading built on an
  * earlier one. What each scout read is kept in sessionDir for the next push.
  */
 export async function scout(o: { models: string[]; request: ScoutRequest; work: string; out: string; sessionDir?: string; base: string; head: string; thinking: string; timeoutMs: number; transcript: boolean }): Promise<{ readings: ScoutReading[]; since: boolean }> {
   const last = lastScouted(o.sessionDir);
   const diff = last && changesSince(path.join(o.work, TREE), last, o.base, o.head);
-  const lines = diff === undefined ? undefined : changedLines(diff);
-  const since = lines !== undefined && readsSince(lines, o.request.diffLines);
-  if (since && lines > 0) writeFileSync(path.join(o.work, SINCE), diff!);
+  const plan = last ? scoutPlan(diff, last.base === o.base, o.request.diffLines) : "whole";
+  if (plan === "since") writeFileSync(path.join(o.work, SINCE), diff!);
+  const since = plan !== "whole";
   const got = await Promise.all(
     o.models.map(async (model, i): Promise<ScoutSubmission | string> => {
       const earlier = since ? last!.readings[model] : undefined;
-      if (earlier && lines === 0) return earlier;
+      if (earlier && plan === "keep") return earlier;
       const dir = path.join(o.out, `scout-${i}`);
-      const request = earlier ? { ...o.request, since: { lines: lines!, findings: earlier.findings } } : o.request;
+      const request = earlier ? { ...o.request, since: { lines: changedLines(diff!), findings: earlier.findings } } : o.request;
       await run({ role: "scout", request, outDir: dir, model, thinking: o.thinking, timeoutMs: o.timeoutMs, transcript: o.transcript });
       return (submitted(dir) as ScoutSubmission | undefined) ?? failed(dir);
     }),
