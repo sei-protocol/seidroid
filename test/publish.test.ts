@@ -11,7 +11,9 @@ const patch = "@@ -1,2 +1,3 @@\n a\n+b\n c";
 type Route = (body: any) => Response;
 
 /** fake answers GitHub calls from routes keyed "METHOD path" (the query string dropped) and records every call. */
-function fake(routes: Record<string, Route>, threads: { id: string; body: string; login?: string; resolved?: boolean }[] = []) {
+type Thread = { id: string; body: string; login?: string; resolved?: boolean; path?: string; line?: number | null; originalLine?: number | null; side?: string };
+
+function fake(routes: Record<string, Route>, threads: Thread[] = [], replyFails = false) {
   const calls: { key: string; body: any }[] = [];
   const base: Record<string, Route> = {
     "GET /repos/o/r/pulls/7": () => ({ status: 200, data: { changed_files: 1, head: { sha: "abc" } } }),
@@ -32,9 +34,14 @@ function fake(routes: Record<string, Route>, threads: { id: string; body: string
       return route(body);
     },
     async graphql(query: string, variables: Record<string, unknown>): Promise<any> {
-      calls.push({ key: query.includes("resolveReviewThread") ? "resolve" : "threads", body: variables });
-      if (query.includes("resolveReviewThread")) return {};
-      const nodes = threads.map((th) => ({ id: th.id, isResolved: th.resolved ?? false, comments: { nodes: [{ body: th.body, author: { login: th.login ?? "seidroid" } }] } }));
+      const key = query.includes("resolveReviewThread") ? "resolve" : query.includes("addPullRequestReviewThreadReply") ? "reply" : "threads";
+      calls.push({ key, body: variables });
+      if (key === "reply" && replyFails) throw new Error("graphql: 502");
+      if (key !== "threads") return {};
+      const nodes = threads.map((th) => ({
+        id: th.id, isResolved: th.resolved ?? false, path: th.path ?? "a.go", line: th.line === undefined ? 2 : th.line, originalLine: th.originalLine ?? null, diffSide: th.side ?? "RIGHT",
+        comments: { nodes: [{ body: th.body, author: { login: th.login ?? "seidroid" } }] },
+      }));
       return { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes } } } };
     },
   };
@@ -103,11 +110,11 @@ test("publish anchors nothing on a file list GitHub cut short", async () => {
 test("publish resolves only its own threads, superseded ones once the restatement lands, and their duplicates", async () => {
   const own = `${MARKER.finding}\n**blocker** — old`;
   const { gh, of } = fake({}, [
-    { id: "T1", body: own },
-    { id: "T2", body: own },
+    { id: "T1", body: own, line: 30 },
+    { id: "T2", body: own, line: 30 },
     { id: "T3", body: `${MARKER.finding}\n**nit** — other` },
     { id: "T4", body: `${MARKER.finding}\n**nit** — human`, login: "mallory" },
-    { id: "T5", body: `${MARKER.finding}\n**nit** — gone` },
+    { id: "T5", body: `${MARKER.finding}\n**nit** — gone`, line: 40 },
   ]);
   const v = verdict({ inline_comments: [comment({ severity: "suggestion", supersedes_thread_ids: ["T1"] }), comment({ line: 9, supersedes_thread_ids: ["T5"] })], resolved_thread_ids: ["T3", "T4"] });
   const r = await publish(gh, T, { verdict: v });
@@ -116,7 +123,7 @@ test("publish resolves only its own threads, superseded ones once the restatemen
 });
 
 test("publish keeps a superseded thread open when its restatement landed nowhere", async () => {
-  const { gh } = fake({ "POST /repos/o/r/pulls/7/comments": () => ({ status: 422, data: {} }) }, [{ id: "T5", body: `${MARKER.finding}\nx` }]);
+  const { gh } = fake({ "POST /repos/o/r/pulls/7/comments": () => ({ status: 422, data: {} }) }, [{ id: "T5", body: `${MARKER.finding}\nx`, line: 40 }]);
   const r = await publish(gh, T, { verdict: verdict({ inline_comments: [comment({ line: 9, supersedes_thread_ids: ["T5"] })] }) });
   assert.deepEqual(r.resolved, []);
   assert.equal(r.unplaced, 1);
@@ -193,4 +200,75 @@ test("publish only comments on a clean review unless it may approve, and still r
   assert.deepEqual(await events(false, {}), ["COMMENT"]);
   assert.deepEqual(await events(true, {}), ["APPROVE"]);
   assert.deepEqual(await events(false, { inline_comments: [comment()] }), ["REQUEST_CHANGES"]);
+});
+
+test("publish restates a finding in its own open thread that carries it instead of opening another", async () => {
+  const { gh, of } = fake({}, [
+    { id: "SAME", body: `${MARKER.finding}\n**suggestion** — b panics\n\n_Cited at \`a.go:40\`, outside this diff's changed lines._`, line: null },
+    { id: "NEAR", body: `${MARKER.finding}\n**blocker** — reads count as admission`, line: null, originalLine: 6 },
+    { id: "BOT", body: `${MARKER.finding}\n**blocker** — c leaks`, login: "other-bot" },
+    { id: "LEFT", body: `${MARKER.finding}\n**blocker** — d leaks`, side: "LEFT" },
+    { id: "FAR", body: `${MARKER.finding}\n**blocker** — d leaks`, line: 9 },
+  ]);
+  const v = verdict({
+    inline_comments: [comment(), comment({ line: 3, body: "reads are admission", supersedes_thread_ids: ["NEAR"] }), comment({ body: "c leaks" })],
+  });
+  const r = await publish(gh, T, { verdict: v });
+  assert.deepEqual(of("reply").map((b: any) => b.id), ["SAME", "NEAR"]);
+  assert.match(of("reply")[0].body, /^\*\*blocker\*\* — b panics\n\n_The review of `abc` finds this again at `a.go:2`._$/);
+  assert.deepEqual(of("POST /repos/o/r/pulls/7/reviews")[0].comments.map((c: any) => c.body), [`${MARKER.finding}\n**blocker** — c leaks`]);
+  assert.equal(of("POST /repos/o/r/pulls/7/comments").length, 0);
+  assert.deepEqual(r.resolved, []);
+  assert.deepEqual({ replied: r.replied, inline: r.inline, unplaced: r.unplaced }, { replied: 2, inline: 1, unplaced: 0 });
+});
+
+test("publish opens no thread for a finding whose reply may not have landed, and replies nowhere in shadow", async () => {
+  const thread = [{ id: "T1", body: `${MARKER.finding}\n**blocker** — old` }];
+  const failed = fake({}, thread, true);
+  const r = await publish(failed.gh, T, { verdict: verdict({ inline_comments: [comment()] }) });
+  assert.equal(failed.of("POST /repos/o/r/pulls/7/reviews")[0].comments.length, 0);
+  assert.match(failed.of("POST /repos/o/r/pulls/7/reviews")[0].body, /`a.go:2` — b panics/);
+  assert.deepEqual({ replied: r.replied, unplaced: r.unplaced }, { replied: 0, unplaced: 1 });
+
+  const addressed = fake({}, thread);
+  await publish(addressed.gh, T, { verdict: verdict({ inline_comments: [comment()], resolved_thread_ids: ["T1"] }) });
+  assert.equal(addressed.of("reply").length, 0);
+  assert.equal(addressed.of("POST /repos/o/r/pulls/7/reviews")[0].comments.length, 1);
+
+  const shadow = fake({}, thread);
+  await publish(shadow.gh, { ...T, shadow: true }, { verdict: verdict({ inline_comments: [comment()] }) });
+  assert.equal(shadow.of("reply").length, 0);
+});
+
+test("publish posts nothing on the code and never approves once the head has moved past the commit reviewed", async () => {
+  const moved = () => fake({ "GET /repos/o/r/pulls/7": () => ({ status: 200, data: { changed_files: 1, head: { sha: "def" } } }) }, [{ id: "T1", body: `${MARKER.finding}\n**nit** — old` }]);
+  const clean = moved();
+  const r = await publish(clean.gh, T, { verdict: verdict({ inline_comments: [comment({ severity: "suggestion" }), comment({ line: 9, severity: "suggestion" })], resolved_thread_ids: ["T1"] }) });
+  const [review] = clean.of("POST /repos/o/r/pulls/7/reviews");
+  assert.deepEqual([review.event, review.commit_id, review.comments], ["COMMENT", "abc", []]);
+  assert.match(review.body, /^<!-- seidroid-review -->\n\*\*The head moved during this review.\*\* It read `abc`, but the pull request is now at `def`/);
+  assert.match(review.body, /`a.go:2` — b panics/);
+  assert.deepEqual([clean.of("POST /repos/o/r/pulls/7/comments").length, clean.of("reply").length, clean.of("resolve").length], [0, 0, 0]);
+  assert.deepEqual({ moved: r.moved, unplaced: r.unplaced, dismissed: r.dismissed }, { moved: "def", unplaced: 2, dismissed: 0 });
+
+  const blocked = moved();
+  await publish(blocked.gh, T, { verdict: verdict({ inline_comments: [comment()] }) });
+  assert.deepEqual(blocked.of("POST /repos/o/r/pulls/7/reviews").map((x: any) => [x.event, x.comments.length]), [["REQUEST_CHANGES", 0]]);
+});
+
+test("publish withdraws an approval when the head moved while it was posted", async () => {
+  const heads = ["abc", "def"];
+  const { gh, of } = fake({
+    "GET /repos/o/r/pulls/7": () => ({ status: 200, data: { changed_files: 1, head: { sha: heads.shift() ?? "def" } } }),
+    "POST /repos/o/r/pulls/7/reviews": () => ({ status: 200, data: { id: 9, state: "APPROVED" } }),
+    "PUT /repos/o/r/pulls/7/reviews/:id/dismissals": () => ({ status: 200, data: {} }),
+  });
+  const r = await publish(gh, T, { verdict: verdict({}) });
+  assert.equal(of("POST /repos/o/r/pulls/7/reviews")[0].event, "APPROVE");
+  assert.match(of("PUT /repos/o/r/pulls/7/reviews/9/dismissals")[0].message, /^Withdrawn: the head moved/);
+  assert.deepEqual({ moved: r.moved, dismissed: r.dismissed }, { moved: "def", dismissed: 0 });
+
+  const still = fake({ "POST /repos/o/r/pulls/7/reviews": () => ({ status: 200, data: { id: 9, state: "APPROVED" } }) });
+  assert.equal((await publish(still.gh, T, { verdict: verdict({}) })).moved, "");
+  assert.equal(still.of("PUT /repos/o/r/pulls/7/reviews/9/dismissals").length, 0);
 });
