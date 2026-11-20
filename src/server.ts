@@ -312,7 +312,7 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
     for (const f of reportedFindings(v)) if (f.severity !== "nit" || includeNits) severity[f.severity]++;
     for (const [s, n] of Object.entries(severity)) m.findings.inc({ repo, mode, severity: s }, n);
   }
-  for (const [placement, n] of [["inline", report.inline], ["file", report.file], ["unplaced", report.unplaced]] as const) m.placed.inc({ repo, placement }, n);
+  for (const [placement, n] of [["inline", report.inline], ["file", report.file], ["reply", report.replied], ["unplaced", report.unplaced]] as const) m.placed.inc({ repo, placement }, n);
   recordRuns(m, repo, runStats(body.runs));
 }
 

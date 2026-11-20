@@ -144,16 +144,39 @@ export function fit(body: string, max = MAX_BODY): string {
 }
 
 /** summaryComment is the review's body as posted: marker, prose, and how the review was decided. */
-export function summaryComment(v: Verdict, includeNits: boolean, runUrl: string, unplaced: readonly Finding[] = []): string {
+export function summaryComment(v: Verdict, includeNits: boolean, runUrl: string, unplaced: readonly Finding[] = [], moved?: Moved): string {
   const how = v.settledBy ? `settled by ${v.settledBy} with no review turn` : `the review wrote ${code(v.submission.decision)}`;
-  return `${MARKER.verdict}\n${fit(reviewBody(v, includeNits, unplaced))}\n\n<sub>Seidroid Review · ${how} · [run](${runUrl})</sub>`;
+  const note = moved ? `${movedNote(moved)}\n\n` : "";
+  return `${MARKER.verdict}\n${fit(note + reviewBody(v, includeNits, unplaced))}\n\n<sub>Seidroid Review · ${how} · [run](${runUrl})</sub>`;
 }
+
+/** Moved names the commit a review read and the head the pull request had moved to by the time it was posted. */
+export interface Moved {
+  read: string;
+  head: string;
+}
+
+const movedNote = (m: Moved): string =>
+  `**The head moved during this review.** It read ${code(m.read.slice(0, 12))}, but the pull request is now at ${code(m.head.slice(0, 12))}, which it has not read, so it lists any findings here rather than on the code and records no approval.`;
 
 /** findingComment is an inline finding's body; cited marks one that fell back to the whole file. */
 export function findingComment(f: Finding, cited = false): string {
   const where = cited ? `\n\n_Cited at ${code(`${f.file}:${f.line}`)}, outside this diff's changed lines._` : "";
   return fit(`${MARKER.finding}\n**${f.severity}** — ${f.detail}${where}`);
 }
+
+const CITED = /\n\n_Cited at `[^`]*`, outside this diff's changed lines\._$/;
+
+/** findingDetail is the severity and detail a finding comment carries, as findingComment wrote them; empty for any other body. */
+export function findingDetail(body: string): { severity: string; detail: string } {
+  const head = `${MARKER.finding}\n`;
+  const m = body.startsWith(head) ? /^\*\*(blocker|suggestion|nit)\*\* — ([\s\S]*)$/.exec(body.slice(head.length)) : null;
+  return m ? { severity: m[1]!, detail: m[2]!.replace(CITED, "") } : { severity: "", detail: "" };
+}
+
+/** repeatComment is a reply restating a finding in the thread that already carries it, for the review of head. */
+export const repeatComment = (f: Finding, head: string): string =>
+  fit(`**${f.severity}** — ${f.detail}\n\n_The review of ${code(head.slice(0, 12))} finds this again at ${code(`${f.file}:${f.line}`)}._`);
 
 export interface CheckOutput {
   conclusion: Conclusion;
