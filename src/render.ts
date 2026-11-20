@@ -167,11 +167,11 @@ export function findingComment(f: Finding, cited = false): string {
 
 const CITED = /\n\n_Cited at `[^`]*`, outside this diff's changed lines\._$/;
 
-/** findingDetail is the detail a finding comment carries, as findingComment wrote it; empty for any other body. */
-export function findingDetail(body: string): string {
+/** findingDetail is the severity and detail a finding comment carries, as findingComment wrote them; empty for any other body. */
+export function findingDetail(body: string): { severity: string; detail: string } {
   const head = `${MARKER.finding}\n`;
-  const m = body.startsWith(head) ? /^\*\*(?:blocker|suggestion|nit)\*\* — ([\s\S]*)$/.exec(body.slice(head.length)) : null;
-  return m ? m[1]!.replace(CITED, "") : "";
+  const m = body.startsWith(head) ? /^\*\*(blocker|suggestion|nit)\*\* — ([\s\S]*)$/.exec(body.slice(head.length)) : null;
+  return m ? { severity: m[1]!, detail: m[2]!.replace(CITED, "") } : { severity: "", detail: "" };
 }
 
 /** repeatComment is a reply restating a finding in the thread that already carries it, for the review of head. */

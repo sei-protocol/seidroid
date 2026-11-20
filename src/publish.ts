@@ -175,24 +175,28 @@ async function withdrawIfMoved(gh: GitHub, base: string, t: Target, review: numb
 /**
  * repeatsOf pairs each finding with the open, current thread of this App's that already carries it, one
  * finding to a thread on its file: first a thread it supersedes within NEAR lines on its side, then one
- * with the same detail, then the nearest within NEAR lines. Threads the review says are addressed carry
+ * with the same detail, then the nearest of the same severity within NEAR lines. Threads the review says are addressed carry
  * nothing, and those a finding supersedes carry only that finding: further away it opens a new thread
  * and the old one is resolved.
  */
 function repeatsOf(findings: readonly Finding[], own: ReadonlyMap<string, OwnThread>, addressed: ReadonlySet<string>): Map<Finding, string> {
   const out = new Map<Finding, string>();
   const open = [...own].filter(([id, th]) => !addressed.has(id) && !th.outdated);
+  const taken = new Set<string>();
+  // Each pass pairs the closest finding and thread first, so finding order cannot steal a thread.
   const pass = (score: (f: Finding, id: string, th: OwnThread) => number) => {
+    const pairs: [Finding, string, number][] = [];
     for (const f of findings) {
       if (out.has(f)) continue;
-      let best: [string, number] | undefined;
       for (const [id, th] of open) {
-        const s = th.path === f.file ? score(f, id, th) : Infinity;
-        if (s < (best?.[1] ?? Infinity)) best = [id, s];
+        const s = th.path === f.file && !taken.has(id) ? score(f, id, th) : Infinity;
+        if (s < Infinity) pairs.push([f, id, s]);
       }
-      if (!best) continue;
-      out.set(f, best[0]);
-      open.splice(open.findIndex(([id]) => id === best[0]), 1);
+    }
+    for (const [f, id] of pairs.sort((a, b) => a[2] - b[2])) {
+      if (out.has(f) || taken.has(id)) continue;
+      out.set(f, id);
+      taken.add(id);
     }
   };
   const near = (f: Finding, th: OwnThread) => {
@@ -202,7 +206,7 @@ function repeatsOf(findings: readonly Finding[], own: ReadonlyMap<string, OwnThr
   const superseded = new Set(findings.flatMap((f) => f.supersedes));
   pass((f, id, th) => (f.supersedes.includes(id) ? near(f, th) : Infinity));
   pass((f, id, th) => (!superseded.has(id) && th.detail !== "" && th.detail === f.detail ? 0 : Infinity));
-  pass((f, id, th) => (superseded.has(id) ? Infinity : near(f, th)));
+  pass((f, id, th) => (superseded.has(id) || th.severity !== f.severity ? Infinity : near(f, th)));
   return out;
 }
 
@@ -254,6 +258,7 @@ const login = (s: string): string => s.replace(/\[bot\]$/, "");
 /** OwnThread is an open thread this App started with a finding: its first comment and where it sits. */
 interface OwnThread {
   body: string;
+  severity: string;
   detail: string;
   path: string;
   /** On the current head, or null once outdated or on the whole file. */
@@ -272,7 +277,7 @@ async function ownThreads(gh: GitHub, t: Target): Promise<Map<string, OwnThread>
     for (const th of threads.nodes as { id: string; isResolved: boolean; isOutdated: boolean; path: string; line: number | null; diffSide: string; comments: { nodes: { body: string; author: { login: string } | null }[] } }[]) {
       const first = th.comments.nodes[0];
       if (th.isResolved || !first || login(first.author?.login ?? "") !== login(t.bot) || !first.body.startsWith(MARKER.finding)) continue;
-      own.set(th.id, { body: first.body, detail: findingDetail(first.body), path: th.path, line: th.line ?? null, outdated: th.isOutdated === true, side: th.diffSide === "LEFT" ? "LEFT" : "RIGHT" });
+      own.set(th.id, { body: first.body, ...findingDetail(first.body), path: th.path, line: th.line ?? null, outdated: th.isOutdated === true, side: th.diffSide === "LEFT" ? "LEFT" : "RIGHT" });
     }
     if (!threads.pageInfo.hasNextPage) break;
     after = threads.pageInfo.endCursor;

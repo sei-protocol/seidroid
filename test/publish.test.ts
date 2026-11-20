@@ -226,6 +226,14 @@ test("publish restates a finding in its own open thread that carries it instead 
   assert.deepEqual({ replied: r.replied, inline: r.inline, unplaced: r.unplaced }, { replied: 3, inline: 1, unplaced: 0 });
 });
 
+test("publish replies a nearby finding only into a thread of its severity, closest first", async () => {
+  const { gh, of } = fake({}, [{ id: "T", body: `${MARKER.finding}\n**blocker** — old wording`, line: 10 }, { id: "N", body: `${MARKER.finding}\n**nit** — style`, line: 20 }]);
+  const v = verdict({ inline_comments: [comment({ line: 12, body: "farther" }), comment({ line: 11, body: "closer" }), comment({ line: 20, body: "unrelated" })] });
+  const r = await publish(gh, T, { verdict: v });
+  assert.deepEqual(of("reply").map((b: any) => [b.id, b.body.split(" — ")[1].split("\n")[0]]), [["T", "closer"]]);
+  assert.equal(r.replied, 1);
+});
+
 test("publish opens no thread for a finding whose reply may not have landed, and replies nowhere in shadow", async () => {
   const thread = [{ id: "T1", body: `${MARKER.finding}\n**blocker** — old` }];
   const failed = fake({}, thread, true);
