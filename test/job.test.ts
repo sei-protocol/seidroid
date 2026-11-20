@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, conversation, earlierFindings, guard, keepsTranscripts, priorThreads, recordInputs, requested, runsIn, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, scout, scoutPlan, service, type Event, type GuardOptions } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -270,4 +271,84 @@ test("keepsTranscripts only for a repository known to be private", () => {
   assert.equal(keepsTranscripts({ private: "true" }), true);
   for (const visibility of ["false", "", "True", "null"]) assert.equal(keepsTranscripts({ private: visibility }), false);
   assert.equal(keepsTranscripts({}), false);
+});
+
+function history() {
+  const tree = mkdtempSync(path.join(tmpdir(), "since-"));
+  const g = (...args: string[]) => execFileSync("git", ["-C", tree, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  const commit = (file: string, text: string) => {
+    writeFileSync(path.join(tree, file), text);
+    g("add", "-A");
+    g("commit", "-qm", file);
+    return g("rev-parse", "HEAD");
+  };
+  g("init", "-q", "-b", "main");
+  const base = commit("a", "1\n");
+  const read = commit("pr", "first\n");
+  g("checkout", "-q", "-b", "upstream", base);
+  const moved = commit("b", "upstream\n");
+  g("checkout", "-q", "--detach", read);
+  g("merge", "-q", "--no-edit", moved);
+  const head = commit("pr", "first\nsecond\n");
+  return { tree, base, read, moved, head };
+}
+
+test("changesSince leaves out what the base brought in, and is undefined for a head it cannot reach", () => {
+  const h = history();
+  const last = { head: h.read, base: h.base, readings: {} };
+  const diff = changesSince(h.tree, last, h.moved, h.head)!;
+  assert.match(diff, /^\+second$/m);
+  assert.doesNotMatch(diff, /upstream/);
+  assert.equal(changedLines(diff), 1);
+  assert.equal(changesSince(h.tree, { ...last, head: "f".repeat(40) }, h.moved, h.head), undefined);
+});
+
+test("lastScouted needs a restored session and a well-formed record", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "session-"));
+  const record = { head: "a".repeat(40), base: "b".repeat(40), readings: { m: { read: 3, inert: false, findings: [] } } };
+  writeFileSync(path.join(dir, "scouts.json"), JSON.stringify(record));
+  assert.equal(lastScouted(dir), undefined, "no conversation to continue");
+  writeFileSync(path.join(dir, "s.jsonl"), "{}\n");
+  assert.deepEqual(lastScouted(dir), record);
+  for (const bad of [{ ...record, head: "--output=x" }, { ...record, readings: { m: { read: 3 } } }]) {
+    writeFileSync(path.join(dir, "scouts.json"), JSON.stringify(bad));
+    assert.equal(lastScouted(dir), undefined);
+  }
+  assert.equal(lastScouted(undefined), undefined);
+});
+
+test("scout keeps a reading when nothing changed since it, and records the new head", async () => {
+  const h = history();
+  const work = mkdtempSync(path.join(tmpdir(), "work-"));
+  execFileSync("git", ["clone", "-q", h.tree, path.join(work, "tree")]);
+  const sessionDir = path.join(work, "session");
+  mkdirSync(sessionDir);
+  writeFileSync(path.join(sessionDir, "s.jsonl"), "{}\n");
+  const reading = { read: 2, inert: false, findings: [{ file: "pr", line: 1, severity: "high" as const, detail: "wrong" }] };
+  writeFileSync(path.join(sessionDir, "scouts.json"), JSON.stringify({ head: h.head, base: h.moved, readings: { m: reading } }));
+  const got = await scout({ models: ["m"], request: { repo: "o/r", pr: 7, diffLines: 2 }, work, out: path.join(work, "out"), sessionDir, base: h.moved, head: h.head, thinking: "high", timeoutMs: 1, transcript: false });
+  assert.equal(got.since, true);
+  assert.deepEqual(got.readings, [{ name: "m", note: "", ...reading }]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(sessionDir, "scouts.json"), "utf8")), { head: h.head, base: h.moved, readings: { m: reading } });
+});
+
+test("readsSince only for a change that is small next to the diff and on its own", () => {
+  for (const [changed, diffLines, want] of [[0, 1, true], [25, 100, true], [26, 100, false], [400, 4000, true], [401, 4000, false], [1089, 2495, false]] as const) {
+    assert.equal(readsSince(changed, diffLines), want, `${changed} of ${diffLines}`);
+  }
+});
+
+test("scoutPlan builds on a reading only on the same base", () => {
+  const rename = "diff --git a/x b/y\nold mode 100644\nnew mode 100755\nsimilarity index 100%\nrename from x\nrename to y\n";
+  const edit = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n";
+  for (const [diff, sameBase, want] of [[undefined, true, "whole"], ["", true, "keep"], ["", false, "whole"], [rename, true, "since"], [edit, true, "since"], [edit, false, "whole"], [edit.repeat(30), true, "whole"]] as const) {
+    assert.equal(scoutPlan(diff, sameBase, 10), want, `${JSON.stringify(diff)?.slice(0, 20)} sameBase=${sameBase}`);
+  }
+});
+
+test("readAll keeps only readings of everything the scout was asked to read", () => {
+  const got = (read: number) => ({ read, inert: false, findings: [] });
+  for (const [g, asked, want] of [[got(100), 100, true], [got(120), 100, true], [got(99), 100, false], [got(0), 0, false], [got(3), 0, true], ["it timed out", 0, false]] as const) {
+    assert.equal(readAll(g, asked), want, `${JSON.stringify(g)} of ${asked}`);
+  }
 });

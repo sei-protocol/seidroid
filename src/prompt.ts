@@ -1,9 +1,12 @@
 import { MAX_DETAIL, MAX_FIELD, historyStep, openThreadsStep, threadUpdateStep, type PriorThread } from "./history.ts";
 import { block, prose } from "./prose.ts";
+import { COMMAND_SECONDS } from "./sandbox.ts";
 import { clip, oneLine } from "./text.ts";
 
 /** The files the review job lays out in the agent's working directory. */
 export const DIFF = "pr.diff";
+/** SINCE is what changed since the head the scouts last read, when they read one. */
+export const SINCE = "since.diff";
 export const TREE = "tree";
 export const STANDARDS = "standards.md";
 export const INTENT = "intent.md";
@@ -58,7 +61,7 @@ export function location(file: string, line: number): string {
 }
 
 function readStep(req: Request): string[] {
-  const shell = req.hasTree && req.hasShell ? `\n\n${prose("shell", { tree: TREE })}` : "";
+  const shell = req.hasTree && req.hasShell ? `\n\n${prose("shell", { tree: TREE, seconds: COMMAND_SECONDS })}` : "";
   const tree = req.hasTree ? prose("tree", { tree: TREE }) + shell : prose("no-tree");
   return block("read", { diff: DIFF, lines: req.diffLines, tree });
 }

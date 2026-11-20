@@ -3,7 +3,7 @@ import path from "node:path";
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { TREE } from "./prompt.ts";
 import { ReplySubmission } from "./reply.ts";
-import { sandboxed } from "./sandbox.ts";
+import { commandTimeout, sandboxed } from "./sandbox.ts";
 import { ScoutSubmission } from "./scout.ts";
 import { ReviewSubmission } from "./verdict.ts";
 
@@ -43,7 +43,8 @@ export function within(root: string, p: string): string | undefined {
  * The seidroid extension gives the model one way to answer, the submit tool named by
  * SEIDROID_SUBMIT, which writes its validated arguments to SEIDROID_OUT and ends the run.
  * Every other tool is refused unless it only reads inside the working directory, or is bash
- * when SEIDROID_HOME names a home for it: then each command runs in a sandbox (see sandbox.ts).
+ * when SEIDROID_HOME names a home for it: then each command runs in a sandbox (see sandbox.ts),
+ * for at most COMMAND_SECONDS.
  */
 export default function seidroid(pi: ExtensionAPI): void {
   const out = process.env.SEIDROID_OUT;
@@ -54,7 +55,12 @@ export default function seidroid(pi: ExtensionAPI): void {
   const home = process.env.SEIDROID_HOME;
 
   pi.on("tool_call", async (event) => {
-    if (event.toolName === tool.name || (event.toolName === "bash" && home)) return undefined;
+    if (event.toolName === "bash" && home) {
+      const input = event.input as { timeout?: number };
+      input.timeout = commandTimeout(input.timeout);
+      return undefined;
+    }
+    if (event.toolName === tool.name) return undefined;
     if (!READ_TOOLS.has(event.toolName)) return { block: true, reason: `${event.toolName} is not available here` };
     const input = event.input as { path?: string };
     const real = within(root, input.path ?? ".");

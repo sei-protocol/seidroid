@@ -32,6 +32,13 @@ export function bwrapArgs(j: Jail, cwd = j.work): string[] {
   ];
 }
 
+/** COMMAND_SECONDS is the longest a sandboxed command may run, whatever timeout the model asks for. */
+export const COMMAND_SECONDS = 300;
+
+/** commandTimeout is the timeout a sandboxed command runs with: the one asked for, at most COMMAND_SECONDS. */
+export const commandTimeout = (asked: unknown): number =>
+  typeof asked === "number" && asked > 0 && asked < COMMAND_SECONDS ? asked : COMMAND_SECONDS;
+
 const quote = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
 
 /** sandboxed is a shell command line that runs command under bwrapArgs, starting bwrap with only PATH, as its init keeps the environment it started with. */
