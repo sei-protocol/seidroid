@@ -8,7 +8,8 @@ import path from "node:path";
 import type { GitHub, Response } from "../src/github.ts";
 import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
-import { handler, type Config, type Sessions } from "../src/server.ts";
+import { GetObjectCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
+import { handler, s3Sessions, sessionStore, type Config, type Sessions } from "../src/server.ts";
 import { MAX_SESSION, pack } from "../src/session.ts";
 
 const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
@@ -415,7 +416,7 @@ test("react leaves one App reaction on the asker's comment for where the run got
   }
 });
 
-test("session keeps one session per admitted run's repository, pull request and mode, and only for it", async () => {
+test("session keeps one session per admitted run's repository, pull request and mode under the prefix, and only for it", async () => {
   const kept = new Map<string, Buffer>();
   const store: Sessions = { get: async (k) => kept.get(k), put: async (k, b) => void kept.set(k, b) };
   const seth = "/repos/sei-protocol/seth";
@@ -463,6 +464,18 @@ test("session keeps one session per admitted run's repository, pull request and 
   } finally {
     s.close();
   }
+  const prefixed = await serve(base, { ...cfg, sessionPrefix: "/review//dev/" }, store);
+  try {
+    kept.clear();
+    assert.equal((await prefixed.session("PUT", "pr=7&shadow=false", claims(), packed)).status, 200);
+    assert.deepEqual([...kept.keys()], ["review/dev/sei-protocol/sei-chain/7/live/session.tar.zst"]);
+    assert.equal((await prefixed.session("GET", "pr=7&shadow=false")).status, 200);
+  } finally {
+    prefixed.close();
+  }
+  for (const bad of ["review/../prod", "./review", "review/.."]) {
+    await assert.rejects(serve(base, { ...cfg, sessionPrefix: bad }, store), /no \. or \.\. segments/);
+  }
   const off = await serve(base);
   try {
     const r = await off.session("GET", "pr=7");
@@ -471,4 +484,31 @@ test("session keeps one session per admitted run's repository, pull request and 
   } finally {
     off.close();
   }
+});
+
+test("sessionStore picks the store SEIDROID_SESSION_STORE names and refuses one it cannot run", () => {
+  assert.equal(sessionStore({}), undefined);
+  assert.equal(sessionStore({ SEIDROID_SESSION_STORE: "" }), undefined);
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_BUCKET: "seidroid" }), /SEIDROID_SESSION_STORE is empty/);
+  assert.equal(typeof sessionStore({ SEIDROID_SESSION_STORE: "s3", SEIDROID_SESSION_BUCKET: "seidroid" })?.get, "function");
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "s3" }), /SEIDROID_SESSION_BUCKET is not set/);
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "gcs", SEIDROID_SESSION_BUCKET: "seidroid" }), /must be s3 or empty, not "gcs"/);
+});
+
+test("an S3 read denied for a key the listing does not hold is no session, and any other denial is an error", async () => {
+  const denied = Object.assign(new Error("Access Denied"), { name: "AccessDenied" });
+  const s3 = (listing: () => Promise<{ Contents?: { Key: string }[] }>) =>
+    s3Sessions("seidroid", {
+      send: async (cmd: unknown) => {
+        if (cmd instanceof GetObjectCommand) throw denied;
+        assert.ok(cmd instanceof ListObjectsV2Command);
+        assert.deepEqual(cmd.input, { Bucket: "seidroid", Prefix: "review/dev/k", MaxKeys: 1 });
+        return listing();
+      },
+    } as unknown as Pick<S3Client, "send">);
+  assert.equal(await s3(async () => ({})).get("review/dev/k"), undefined);
+  assert.equal(await s3(async () => ({ Contents: [{ Key: "review/dev/k.bak" }] })).get("review/dev/k"), undefined);
+  await assert.rejects(s3(async () => ({ Contents: [{ Key: "review/dev/k" }] })).get("review/dev/k"), denied);
+  const listDenied = new Error("list denied");
+  await assert.rejects(s3(async () => { throw listDenied; }).get("review/dev/k"), listDenied);
 });
