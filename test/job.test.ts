@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, changesSince, conversation, earlierFindings, guard, keepsTranscripts, lastScouted, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, scout, scoutPlan, service, standingOf, type Event, type GuardOptions, type OwnReviews, type Standing } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, FULL_READ_ABOVE, guard, keepsTranscripts, lastScouted, loadSession, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, saveSession, scout, scoutPlan, service, standingOf, type Event, type GuardOptions, type OwnReviews, type Standing } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -348,8 +348,9 @@ test("scout keeps a reading when nothing changed since it, and records the new h
   assert.deepEqual(JSON.parse(readFileSync(path.join(sessionDir, "scouts.json"), "utf8")), { head: h.head, base: h.moved, readings: { m: reading } });
 });
 
-test("readsSince only for a change that is small next to the diff and on its own", () => {
-  for (const [changed, diffLines, want] of [[0, 1, true], [25, 100, true], [26, 100, false], [400, 4000, true], [401, 4000, false], [1089, 2495, false]] as const) {
+test("readsSince only for a change that is small next to a diff of at most FULL_READ_ABOVE lines", () => {
+  assert.equal(FULL_READ_ABOVE, 500);
+  for (const [changed, diffLines, want] of [[0, 1, true], [25, 100, true], [26, 100, false], [125, 500, true], [126, 500, false], [1, 501, false], [0, 4000, false], [1089, 2495, false]] as const) {
     assert.equal(readsSince(changed, diffLines), want, `${changed} of ${diffLines}`);
   }
 });
@@ -360,6 +361,8 @@ test("scoutPlan builds on a reading only on the same base", () => {
   for (const [diff, sameBase, want] of [[undefined, true, "whole"], ["", true, "keep"], ["", false, "whole"], [rename, true, "since"], [edit, true, "since"], [edit, false, "whole"], [edit.repeat(30), true, "whole"]] as const) {
     assert.equal(scoutPlan(diff, sameBase, 10), want, `${JSON.stringify(diff)?.slice(0, 20)} sameBase=${sameBase}`);
   }
+  assert.equal(scoutPlan("", true, FULL_READ_ABOVE + 1), "keep");
+  assert.equal(scoutPlan(edit, true, FULL_READ_ABOVE + 1), "whole");
 });
 
 test("readAll keeps only readings of everything the scout was asked to read", () => {
@@ -367,4 +370,53 @@ test("readAll keeps only readings of everything the scout was asked to read", ()
   for (const [g, asked, want] of [[got(100), 100, true], [got(120), 100, true], [got(99), 100, false], [got(0), 0, false], [got(3), 0, true], ["it timed out", 0, false]] as const) {
     assert.equal(readAll(g, asked), want, `${JSON.stringify(g)} of ${asked}`);
   }
+});
+
+test("loadSession restores the kept session, and starts cold without one unless the service refuses the run", async (t) => {
+  let status = 200;
+  let packed = Buffer.alloc(0);
+  const asked: string[] = [];
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url!, "http://x");
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c)).on("end", () => {
+      if (url.pathname === "/token") return res.setHeader("Content-Type", "application/json").end('{"value":"t"}');
+      asked.push(`${req.method} ${url.search}`);
+      if (req.method === "PUT") packed = Buffer.concat(chunks);
+      res.statusCode = status;
+      if (status === 200 && req.method === "GET") return res.setHeader("Content-Type", "application/zstd").end(packed);
+      res.setHeader("Content-Type", "application/json").end(JSON.stringify({ error: `answered ${status}` }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+  t.after(() => srv.close());
+  const origin = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  Object.assign(process.env, { ACTIONS_ID_TOKEN_REQUEST_URL: `${origin}/token?x=1`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "bearer" });
+  t.after(() => {
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    delete process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  });
+  const of = { pr: 7, comment: 5, shadow: false };
+  const kept = mkdtempSync(path.join(tmpdir(), "seidroid-kept-"));
+  writeFileSync(path.join(kept, "a_seidroid.jsonl"), "{}\n");
+  await saveSession(origin, of, kept);
+  assert.deepEqual(asked, ["PUT ?pr=7&comment=5&shadow=false"]);
+  const dir = path.join(mkdtempSync(path.join(tmpdir(), "seidroid-load-")), "session");
+  assert.equal(await loadSession(origin, of, dir), "restored");
+  assert.deepEqual(readdirSync(dir), ["a_seidroid.jsonl"]);
+
+  packed = Buffer.from("not a session");
+  assert.equal(await loadSession(origin, of, dir), "unavailable");
+  assert.deepEqual(readdirSync(dir), []);
+  for (const [code, want] of [[404, "none"], [501, "off"], [500, "unavailable"], [502, "unavailable"]] as const) {
+    status = code;
+    assert.equal(await loadSession(origin, of, dir), want);
+    assert.deepEqual(readdirSync(dir), []);
+  }
+  assert.equal(await loadSession("http://127.0.0.1:1", of, dir), "unavailable");
+  status = 403;
+  await assert.rejects(loadSession(origin, of, dir), /answered 403/);
+  await saveSession(origin, of, kept);
+  status = 500;
+  await saveSession(origin, of, kept);
 });

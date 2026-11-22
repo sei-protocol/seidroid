@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { GitHub, Response } from "../src/github.ts";
 import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
-import { handler, type Config } from "../src/server.ts";
+import { handler, type Config, type Sessions } from "../src/server.ts";
+import { MAX_SESSION, pack } from "../src/session.ts";
 
 const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
 const HEAD = "b".repeat(40);
@@ -16,7 +20,7 @@ const claims = (over: Partial<Claims> = {}): Claims => ({
   actor: "alice", event_name: "pull_request", ref: "refs/pull/7/merge", run_id: "9", run_attempt: "2", jti: Math.random().toString(), exp: Date.now() / 1000 + 300, ...over,
 });
 
-async function serve(routes: Record<string, (body?: any) => Response>, config: Config = cfg) {
+async function serve(routes: Record<string, (body?: any) => Response>, config: Config = cfg, sessions?: Sessions) {
   const published: { target: Target; outcome: Outcome }[] = [];
   const tokens = new Map<string, Claims>();
   const gh: GitHub = {
@@ -30,6 +34,7 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
     bot: async () => "seidroid[bot]",
     publish: async (_gh, target, outcome) => (published.push({ target, outcome }), { conclusion: "success", title: "2 findings", inline: 0, file: 0, replied: 0, unplaced: 0, resolved: [], dismissed: 0, moved: "" }),
     schedule: (t) => void (tick = t),
+    sessions,
   });
   const server = createServer((req, res) => void h(req, res)).listen(0);
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -40,7 +45,14 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
     return { status: res.status, body: await res.json() };
   };
   const metrics = async () => (await fetch(`${url}/metrics`)).text();
-  return { call, published, close: () => server.close(), url, tokens, metrics, tick: () => tick() };
+  const session = async (method: string, query: string, c: Claims | null = claims(), body?: Uint8Array) => {
+    const token = c ? `t${tokens.size}` : "forged";
+    if (c) tokens.set(token, c);
+    const res = await fetch(`${url}/session?${query}`, { method, headers: { Authorization: `Bearer ${token}` }, body: body && new Uint8Array(body) });
+    const raw = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, raw, error: res.headers.get("content-type") === "application/json" ? JSON.parse(raw.toString()).error : undefined };
+  };
+  return { call, session, published, close: () => server.close(), url, tokens, metrics, tick: () => tick() };
 }
 
 const ok = (data: object) => () => ({ status: 200, data });
@@ -153,7 +165,7 @@ test("publish records the review and the job's model runs in the metrics, and co
       { role: "scout", model: "openai/gpt-6.1-sol", submitted: true, error: "", durationMs: 30_000, turns: 3, input: 100, output: 20, cacheRead: 5, cacheWrite: 0, cost: 0.25, commands: 0, failedCommands: 0 },
       { role: "review", model: "anthropic/claude-opus-5{evil}", submitted: false, error: "timed out after 1200s", durationMs: 1_200_000, turns: 40, input: 1e12, output: 300, cacheRead: 0, cacheWrite: 50, cost: 3, commands: 5, failedCommands: 2 },
     ];
-    await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: found }, runs, durationMs: 90_000 });
+    await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: found }, runs, durationMs: 90_000, session: "unavailable" });
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { failure: "the review did not finish: timed out after 1200s" }, shadow: false });
     assert.deepEqual(s.published.map((p) => p.target.externalId), ["compare:pending:90", undefined]);
     await s.tick();
@@ -163,6 +175,8 @@ test("publish records the review and the job's model runs in the metrics, and co
       'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="shadow",trigger="push",conclusion="success",settled="review"} 1',
       'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="live",trigger="push",conclusion="success",settled="none"} 1',
       'seidroid_review_failures_total{repo="sei-protocol/sei-chain",reason="timeout"} 1',
+      'seidroid_review_sessions_total{repo="sei-protocol/sei-chain",mode="shadow",session="unavailable"} 1',
+      'seidroid_review_sessions_total{repo="sei-protocol/sei-chain",mode="live",session="unknown"} 1',
       'seidroid_review_duration_seconds_sum{repo="sei-protocol/sei-chain",mode="shadow"} 90',
       'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="suggestion"} 2',
       'seidroid_findings_total{repo="sei-protocol/sei-chain",mode="shadow",severity="nit"} 0',
@@ -398,5 +412,63 @@ test("react leaves one App reaction on the asker's comment for where the run got
     assert.deepEqual(mine(issue), []);
   } finally {
     s.close();
+  }
+});
+
+test("session keeps one session per admitted run's repository, pull request and mode, and only for it", async () => {
+  const kept = new Map<string, Buffer>();
+  const store: Sessions = { get: async (k) => kept.get(k), put: async (k, b) => void kept.set(k, b) };
+  const seth = "/repos/sei-protocol/seth";
+  const s = await serve({
+    ...base,
+    [`GET ${repo}/issues/comments/5`]: ok({ id: 5, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+    [`GET ${repo}/issues/comments/6`]: ok({ id: 6, user: { login: "bob" }, issue_url: `https://api.github.com${repo}/issues/7` }),
+    [`GET ${repo}/issues/comments/8`]: ok({ id: 8, user: { login: "alice" }, issue_url: `https://api.github.com${repo}/issues/8` }),
+    [`GET ${seth}/pulls/7`]: base[`GET ${repo}/pulls/7`]!,
+    [`GET ${seth}/issues/comments/5`]: ok({ id: 5, user: { login: "alice" }, issue_url: `https://api.github.com${seth}/issues/7` }),
+  }, cfg, store);
+  const dir = mkdtempSync(path.join(tmpdir(), "seidroid-session-"));
+  writeFileSync(path.join(dir, "a_seidroid.jsonl"), "{}\n");
+  const packed = pack(dir);
+  const comment = (over: Partial<Claims> = {}) => claims({ event_name: "issue_comment", ref: "refs/heads/main", ...over });
+  try {
+    assert.equal((await s.session("PUT", "pr=7&shadow=false", claims(), packed)).status, 200);
+    assert.deepEqual([...kept.keys()], ["sei-protocol/sei-chain/7/live/session.tar.zst"]);
+    const got = await s.session("GET", "pr=7&comment=5&shadow=false", comment());
+    assert.equal(got.status, 200);
+    assert.deepEqual(got.raw, packed);
+    assert.equal((await s.session("GET", "pr=7&comment=0&shadow=true")).status, 404);
+    assert.equal((await s.session("GET", "pr=7&comment=5&shadow=false", comment({ repository: "sei-protocol/seth" }))).status, 404);
+
+    const cases: [string, string, Claims | null, number, RegExp, Uint8Array?][] = [
+      ["GET", "pr=7&shadow=false", null, 401, /bad signature/],
+      ["GET", "pr=7&shadow=false", claims({ ref: "refs/pull/8/merge" }), 403, /not pull request 7/],
+      ["GET", "pr=7&shadow=false", claims({ job_workflow_sha: "d".repeat(40) }), 403, /is not on/],
+      ["GET", "pr=7&comment=6&shadow=false", comment(), 403, /not alice's on pull request 7/],
+      ["GET", "pr=7&comment=8&shadow=false", comment(), 403, /not alice's on pull request 7/],
+      ["GET", "pr=7&comment=5&shadow=false", comment({ actor: "mallory" }), 403, /not an active member/],
+      ["GET", "pr=7&shadow=false", comment(), 400, /comment must be/],
+      ["GET", "pr=7&shadow=false", claims({ event_name: "workflow_dispatch", ref: "refs/heads/main" }), 403, /has no pull request/],
+      ["GET", "pr=x", claims(), 400, /pr must be/],
+      ["PUT", "pr=7&shadow=false", claims(), 413, /too large/, new Uint8Array(MAX_SESSION + 1)],
+      ["PUT", "pr=7&shadow=false", claims(), 400, /corrupt header|Unknown frame/, new Uint8Array(100)],
+      ["PUT", "pr=7&comment=6&shadow=false", comment(), 403, /not alice's/, packed],
+    ];
+    for (const [method, query, c, status, err, body] of cases) {
+      const r = await s.session(method, query, c, body);
+      assert.equal(r.status, status, `${method} ${query}: ${r.error}`);
+      assert.match(r.error, err);
+    }
+    assert.deepEqual([...kept.keys()], ["sei-protocol/sei-chain/7/live/session.tar.zst"]);
+  } finally {
+    s.close();
+  }
+  const off = await serve(base);
+  try {
+    const r = await off.session("GET", "pr=7");
+    assert.equal(r.status, 501);
+    assert.match(r.error, /keeps no sessions/);
+  } finally {
+    off.close();
   }
 });

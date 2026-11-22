@@ -204,12 +204,6 @@ jobs:
           path: review/tree
           fetch-depth: 0
           persist-credentials: false
-      - name: Restore the conversation
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/seidroid-session
-          key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: seidroid-session-${{ needs.guard.outputs.pr }}-
       - name: Review
         id: review
         env:
@@ -224,6 +218,7 @@ jobs:
           SERVICE: ${{ inputs.service-url }}
           PR: ${{ needs.guard.outputs.pr }}
           HEAD: ${{ needs.guard.outputs.head }}
+          COMMENT: ${{ needs.guard.outputs.comment }}
           SHADOW: ${{ inputs.shadow }}
           AI_REVIEW_CHECK: ${{ inputs.ai-review-check }}
           REVIEW_MODEL: ${{ inputs.review-model }}
@@ -238,7 +233,7 @@ jobs:
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
           PRIVATE: ${{ github.event.repository.private == true }}
         run: >-
-          node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --shadow "$SHADOW"
+          node .seidroid/src/job.ts review --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT" --shadow "$SHADOW"
           --ai-review-check "$AI_REVIEW_CHECK" --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
           --nitpick-label "$NITPICK" --extra-instructions="$EXTRA" --ask="$ASK"
@@ -253,12 +248,6 @@ jobs:
           COMMENT: ${{ needs.guard.outputs.comment }}
           STATE: ${{ steps.review.outputs.conclusion || 'none' }}
         run: node .seidroid/src/job.ts react --service "$SERVICE" --pr "$PR" --comment "$COMMENT" --state "$STATE"
-      - name: Keep the conversation
-        if: always()
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/seidroid-session
-          key: seidroid-session-${{ needs.guard.outputs.pr }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Keep the run records
         if: always()
         uses: actions/upload-artifact@v7
@@ -307,7 +296,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.guard.outputs.head }}
-          path: reply/tree
+          path: review/tree
           fetch-depth: 0
           persist-credentials: false
       - name: Reply
@@ -323,14 +312,15 @@ jobs:
           PR: ${{ needs.guard.outputs.pr }}
           HEAD: ${{ needs.guard.outputs.head }}
           COMMENT: ${{ needs.guard.outputs.comment }}
+          SHADOW: ${{ inputs.shadow }}
           REVIEW_MODEL: ${{ inputs.review-model }}
           THINKING: ${{ inputs.thinking }}
           EXTRA: ${{ inputs.extra-instructions }}
           PREPARE: ${{ inputs.prepare }}
           PRIVATE: ${{ github.event.repository.private == true }}
         run: >-
-          node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT"
-          --work reply --out "$RUNNER_TEMP/seidroid-out" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
+          node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT" --shadow "$SHADOW"
+          --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
           --extra-instructions="$EXTRA" --home "$RUNNER_TEMP/seidroid-home" --prepare="$PREPARE" --timeout-seconds 600 --private "$PRIVATE"
       - name: Take the eyes back
         if: always() && github.event_name != 'pull_request_review'
