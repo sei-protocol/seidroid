@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { App } from "./app.ts";
 import { all, type GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
@@ -9,6 +10,7 @@ import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } 
 import { publish, recordedHistory, type Outcome, type Report } from "./publish.ts";
 import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
+import { files, MAX_SESSION } from "./session.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
 import { blockers, nonBlockers, parseSubmission, preExisting, reportedFindings, verdictOf, type Verdict } from "./verdict.ts";
 
@@ -34,6 +36,14 @@ export interface Deps {
   publish: typeof publish;
   /** schedule runs tick every so often, for the comparison with v1. */
   schedule?(tick: () => Promise<void>): void;
+  /** sessions keeps each pull request's review session; without it the service keeps none. */
+  sessions?: Sessions;
+}
+
+/** Sessions is a store of packed review sessions by key. */
+export interface Sessions {
+  get(key: string): Promise<Buffer | undefined>;
+  put(key: string, packed: Buffer): Promise<void>;
 }
 
 class HttpError extends Error {
@@ -161,6 +171,30 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     }
   };
 
+  /**
+   * sessionAt is where the pull request a run asks about keeps its review session, once the run is
+   * admitted on it as /publish admits one; a comment's run must also name a comment its actor left on
+   * that pull request. The key comes only from the token's repository and the admitted pull request.
+   */
+  const sessionAt = async (req: IncomingMessage): Promise<{ sessions: Sessions; key: string }> => {
+    const sessions = deps.sessions;
+    if (!sessions) throw new HttpError(501, "this service keeps no sessions");
+    const { claims, gh, owner, repo } = await authorize(req);
+    const q = new URL(req.url ?? "", "http://seidroid").searchParams;
+    const pr = positive(Number(q.get("pr")), "pr");
+    const base = `/repos/${owner}/${repo}`;
+    const pull = await must(gh.rest<Pull>("GET", `${base}/pulls/${pr}`), "read the pull request");
+    await admitted(gh, claims, pr, pull);
+    if (claims.event_name !== "pull_request") {
+      const asked = Object.hasOwn(ASKED, claims.event_name) ? ASKED[claims.event_name]! : undefined;
+      if (!asked) throw new HttpError(403, `a ${claims.event_name} run has no pull request`, "event");
+      const id = positive(Number(q.get("comment")), "comment");
+      const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
+      if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`, "asker");
+    }
+    return { sessions, key: `${owner}/${repo}/${pr}/${q.get("shadow") === "false" ? "live" : "shadow"}/session.tar.zst` };
+  };
+
   const routes: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
     "GET /healthz": async () => ({ ok: true }),
 
@@ -243,6 +277,25 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       return { reaction: want };
     },
 
+    "GET /session": async (req) => {
+      const { sessions, key } = await sessionAt(req);
+      const packed = await sessions.get(key);
+      if (!packed) throw new HttpError(404, "no session is kept for this pull request");
+      return packed;
+    },
+
+    "PUT /session": async (req) => {
+      const { sessions, key } = await sessionAt(req);
+      const packed = await read(req, MAX_SESSION);
+      try {
+        files(packed);
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+      await sessions.put(key, packed);
+      return { bytes: packed.length };
+    },
+
     "POST /publish": async (req) => {
       const { claims, gh, owner, repo } = await authorize(req);
       const body = await json(req);
@@ -291,6 +344,11 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     m.requests.inc({ route: known, code: String(status) });
     m.requestSeconds.observe({ route: known }, (Date.now() - started) / 1000);
     if (route !== "GET /healthz") console.log(JSON.stringify({ route, status, ms: Date.now() - started, ...(status >= 400 ? out as object : {}) }));
+    if (Buffer.isBuffer(out)) {
+      res.writeHead(status, { "Content-Type": "application/zstd" });
+      res.end(out);
+      return;
+    }
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(out));
   };
@@ -314,6 +372,28 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
   }
   for (const [placement, n] of [["inline", report.inline], ["file", report.file], ["reply", report.replied], ["unplaced", report.unplaced]] as const) m.placed.inc({ repo, placement }, n);
   recordRuns(m, repo, runStats(body.runs));
+  m.sessions.inc({ repo, mode, session: SESSION_STATES.includes(body.session) ? body.session : "unknown" });
+}
+
+const SESSION_STATES = ["restored", "none", "off", "unavailable"];
+
+/** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
+function s3Sessions(bucket: string): Sessions {
+  const s3 = new S3Client({});
+  return {
+    get: async (key) => {
+      try {
+        const got = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        return Buffer.from(await got.Body!.transformToByteArray());
+      } catch (e) {
+        if (e instanceof NoSuchKey) return undefined;
+        throw e;
+      }
+    },
+    put: async (key, packed) => {
+      await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: packed, ContentType: "application/zstd" }));
+    },
+  };
 }
 
 /** outcomeOf rebuilds the verdict on the service's side: the contract is checked again and Accepted conditions come from the guidelines file at the base commit. */
@@ -341,16 +421,22 @@ function positive(n: unknown, name: string): number {
   return n as number;
 }
 
-async function json(req: IncomingMessage): Promise<any> {
+async function read(req: IncomingMessage, max: number): Promise<Buffer> {
+  if (Number(req.headers["content-length"]) > max) throw new HttpError(413, "request too large");
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_REQUEST) throw new HttpError(413, "request too large");
+    if (size > max) throw new HttpError(413, "request too large");
     chunks.push(chunk as Buffer);
   }
+  return Buffer.concat(chunks);
+}
+
+async function json(req: IncomingMessage): Promise<any> {
+  const raw = await read(req, MAX_REQUEST);
   try {
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body = JSON.parse(raw.toString("utf8"));
     if (typeof body !== "object" || body === null) throw new Error();
     return body;
   } catch {
@@ -378,6 +464,7 @@ if (import.meta.main) {
   if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
-  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS) });
+  const bucket = env("SEIDROID_SESSION_BUCKET", "");
+  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: bucket ? s3Sessions(bucket) : undefined });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }

@@ -47,6 +47,9 @@ config:
 
 # More ConfigMaps or Secrets to load settings from, as container envFrom
 # entries. The chart's own settings win over the same key in one of these.
+# SEIDROID_SESSION_BUCKET names the S3 bucket that keeps each pull request's
+# review session, with AWS_REGION its region; without it the service keeps none
+# and every review starts cold.
 envFrom: []
 
 serviceAccount:

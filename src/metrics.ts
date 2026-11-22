@@ -57,6 +57,7 @@ export function metrics() {
     compared: counter("seidroid_comparisons_total", "Commits both v1 and v2 were asked to review, by repository and each one's verdict; v1 is missing when it never reviewed the commit.", ["repo", "v1", "v2"]),
     comparedFindings: histogram("seidroid_compared_findings", "Findings per commit both v1 and v2 reviewed, by repository and reviewer.", ["repo", "reviewer"], COUNTS),
     comparedSeconds: histogram("seidroid_compared_duration_seconds", "Review job time per commit both v1 and v2 reviewed and timed, by repository and reviewer.", ["repo", "reviewer"], SECONDS),
+    sessions: counter("seidroid_review_sessions_total", "Reviews published, by repository, mode and how the pull request's session was restored: restored, none kept, off when the service keeps none, or unavailable.", ["repo", "mode", "session"]),
     first: counter("seidroid_compared_first_total", "Which reviewer published first on a compared commit, by repository.", ["repo", "reviewer"]),
   };
 }
