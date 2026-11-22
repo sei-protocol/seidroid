@@ -136,7 +136,8 @@
         "trunk",
         "checkName",
         "audience",
-        "compare"
+        "compare",
+        "sessions"
       ],
       "properties": {
         "team": {
@@ -188,6 +189,31 @@
             "waitMinutes": {
               "type": "integer",
               "minimum": 1
+            }
+          }
+        },
+        "sessions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bucket",
+            "prefix",
+            "region"
+          ],
+          "properties": {
+            "bucket": {
+              "type": "string",
+              "pattern": "^([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])?$"
+            },
+            "prefix": {
+              "type": "string",
+              "not": {
+                "pattern": "(^|/)\\.\\.?(/|$)"
+              }
+            },
+            "region": {
+              "type": "string",
+              "pattern": "^([a-z]{2}(-[a-z]+)+-[0-9]+)?$"
             }
           }
         }

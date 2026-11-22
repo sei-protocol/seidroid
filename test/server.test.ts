@@ -405,7 +405,7 @@ test("react leaves one App reaction on the asker's comment for where the run got
   }
 });
 
-test("session keeps one session per admitted run's repository, pull request and mode, and only for it", async () => {
+test("session keeps one session per admitted run's repository, pull request and mode under the prefix, and only for it", async () => {
   const kept = new Map<string, Buffer>();
   const store: Sessions = { get: async (k) => kept.get(k), put: async (k, b) => void kept.set(k, b) };
   const seth = "/repos/sei-protocol/seth";
@@ -452,6 +452,18 @@ test("session keeps one session per admitted run's repository, pull request and 
     assert.deepEqual([...kept.keys()], ["sei-protocol/sei-chain/7/live/session.tar.zst"]);
   } finally {
     s.close();
+  }
+  const prefixed = await serve(base, { ...cfg, sessionPrefix: "/review//dev/" }, store);
+  try {
+    kept.clear();
+    assert.equal((await prefixed.session("PUT", "pr=7&shadow=false", claims(), packed)).status, 200);
+    assert.deepEqual([...kept.keys()], ["review/dev/sei-protocol/sei-chain/7/live/session.tar.zst"]);
+    assert.equal((await prefixed.session("GET", "pr=7&shadow=false")).status, 200);
+  } finally {
+    prefixed.close();
+  }
+  for (const bad of ["review/../prod", "./review", "review/.."]) {
+    await assert.rejects(serve(base, { ...cfg, sessionPrefix: bad }, store), /no \. or \.\. segments/);
   }
   const off = await serve(base);
   try {

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, ListObjectsV2Command, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { App } from "./app.ts";
 import { all, type GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
@@ -27,6 +27,8 @@ export interface Config {
   checkName: string;
   /** Where to find v1's verdict on a commit reviewed in shadow; without it nothing is compared. */
   compare?: CompareConfig;
+  /** The key prefix every review session is kept under, as slash-separated segments. */
+  sessionPrefix?: string;
 }
 
 export interface Deps {
@@ -105,6 +107,7 @@ const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const prefix = sessionPrefix(cfg.sessionPrefix ?? "");
   const used = new Map<string, number>();
   const m = metrics();
   const cmp = cfg.compare && comparer(m, cfg.compare, deps);
@@ -192,7 +195,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const c = await must(gh.rest<Asked>("GET", asked.read(base, pr, id)), "read the comment");
       if (c.user.login !== claims.actor || !asked.on(c, base, pr)) throw new HttpError(403, `comment ${id} is not ${claims.actor}'s on pull request ${pr}`, "asker");
     }
-    return { sessions, key: `${owner}/${repo}/${pr}/${q.get("shadow") === "false" ? "live" : "shadow"}/session.tar.zst` };
+    return { sessions, key: `${prefix}${owner}/${repo}/${pr}/${q.get("shadow") === "false" ? "live" : "shadow"}/session.tar.zst` };
   };
 
   const routes: Record<string, (req: IncomingMessage) => Promise<unknown>> = {
@@ -377,6 +380,13 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
   m.sessions.inc({ repo, mode, session: SESSION_STATES.includes(body.session) ? body.session : "unknown" });
 }
 
+/** sessionPrefix is a key prefix with its segments joined by single slashes and a trailing one, refusing . and .. segments. */
+export function sessionPrefix(raw: string): string {
+  const segments = raw.split("/").filter((s) => s !== "");
+  if (segments.some((s) => s === "." || s === "..")) throw new Error(`the session prefix must have no . or .. segments, not ${JSON.stringify(raw)}`);
+  return segments.map((s) => `${s}/`).join("");
+}
+
 /** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
 function s3Sessions(bucket: string): Sessions {
   const s3 = new S3Client({ requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } });
@@ -387,6 +397,12 @@ function s3Sessions(bucket: string): Sessions {
         return Buffer.from(await got.Body!.transformToByteArray());
       } catch (e) {
         if (e instanceof NoSuchKey) return undefined;
+        // S3 answers a read of a missing key with 404 only to a caller that may list it, and a
+        // ListBucket grant scoped by s3:prefix may not count, so a denied read is checked by listing.
+        if (e instanceof Error && e.name === "AccessDenied") {
+          const listed = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: key, MaxKeys: 1 }));
+          if (!listed.KeyCount) return undefined;
+        }
         throw e;
       }
     },
@@ -459,6 +475,7 @@ if (import.meta.main) {
     team: env("SEIDROID_TEAM"),
     bots: env("SEIDROID_BOTS", "").split(",").filter((b) => b !== ""),
     checkName: env("SEIDROID_CHECK_NAME", "Seidroid Review"),
+    sessionPrefix: env("SEIDROID_SESSION_PREFIX", ""),
   };
   const v1Check = env("SEIDROID_COMPARE_CHECK", "review");
   if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };

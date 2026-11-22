@@ -16,6 +16,15 @@ data:
   SEIDROID_COMPARE_JOB: {{ .compare.job | quote }}
   SEIDROID_COMPARE_WAIT_MINUTES: {{ .compare.waitMinutes | quote }}
   {{- end }}
+  {{- with .Values.config.sessions }}
+  {{- if .bucket }}
+  SEIDROID_SESSION_BUCKET: {{ .bucket | quote }}
+  SEIDROID_SESSION_PREFIX: {{ .prefix | quote }}
+  {{- with .region }}
+  AWS_REGION: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
   {{- $host := "" }}
   {{- range .Values.httpRoute.hostnames }}
   {{- if and (not $host) (not (contains "*" .)) }}{{ $host = . }}{{ end }}
