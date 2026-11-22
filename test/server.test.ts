@@ -476,8 +476,9 @@ test("session keeps one session per admitted run's repository, pull request and 
 });
 
 test("sessionStore picks the store SEIDROID_SESSION_STORE names and refuses one it cannot run", () => {
-  assert.equal(sessionStore({ SEIDROID_SESSION_BUCKET: "seidroid" }), undefined);
+  assert.equal(sessionStore({}), undefined);
   assert.equal(sessionStore({ SEIDROID_SESSION_STORE: "" }), undefined);
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_BUCKET: "seidroid" }), /SEIDROID_SESSION_STORE is empty/);
   assert.equal(typeof sessionStore({ SEIDROID_SESSION_STORE: "s3", SEIDROID_SESSION_BUCKET: "seidroid" })?.get, "function");
   assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "s3" }), /SEIDROID_SESSION_BUCKET is not set/);
   assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "gcs", SEIDROID_SESSION_BUCKET: "seidroid" }), /must be s3 or empty, not "gcs"/);

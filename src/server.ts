@@ -387,10 +387,13 @@ export function sessionPrefix(raw: string): string {
   return segments.map((s) => `${s}/`).join("");
 }
 
-/** sessionStore is the session store SEIDROID_SESSION_STORE names in vars, or none when it is empty. */
+/** sessionStore is the session store SEIDROID_SESSION_STORE names in vars, or none when it is empty and no store setting is given. */
 export function sessionStore(vars: Record<string, string | undefined>): Sessions | undefined {
   const store = vars.SEIDROID_SESSION_STORE ?? "";
-  if (store === "") return undefined;
+  if (store === "") {
+    if (vars.SEIDROID_SESSION_BUCKET) throw new Error("SEIDROID_SESSION_BUCKET is set but SEIDROID_SESSION_STORE is empty; set config.sessions.store to s3 to keep sessions");
+    return undefined;
+  }
   if (store === "s3") {
     if (!vars.SEIDROID_SESSION_BUCKET) throw new Error("SEIDROID_SESSION_BUCKET is not set");
     return s3Sessions(vars.SEIDROID_SESSION_BUCKET);
