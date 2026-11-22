@@ -356,6 +356,8 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
 
 const seconds = (ms: unknown): number | undefined => (typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 6 * 3600_000) / 1000 : undefined);
 
+const SESSION_STATES = ["restored", "none", "off", "unavailable"];
+
 /** observe records a published review in m: its verdict, its findings and the model runs the job reports. */
 function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boolean, outcome: Outcome, report: Report, body: any): void {
   const repo = claims.repository;
@@ -374,8 +376,6 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
   recordRuns(m, repo, runStats(body.runs));
   m.sessions.inc({ repo, mode, session: SESSION_STATES.includes(body.session) ? body.session : "unknown" });
 }
-
-const SESSION_STATES = ["restored", "none", "off", "unavailable"];
 
 /** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
 function s3Sessions(bucket: string): Sessions {

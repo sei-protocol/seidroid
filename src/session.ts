@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "
 import path from "node:path";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
-/** MAX_SESSION is the most a packed session may weigh; a pull request's session packs to well under 1 MiB after a dozen reviews. */
+/** MAX_SESSION is the most a packed session may weigh, far above the 42 KB the largest one kept in the Actions cache packed to. */
 export const MAX_SESSION = 8 << 20;
 /** MAX_UNPACKED is the most a packed session may unpack to. */
 const MAX_UNPACKED = 64 << 20;
