@@ -402,8 +402,7 @@ export function sessionStore(vars: Record<string, string | undefined>): Sessions
 }
 
 /** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
-function s3Sessions(bucket: string): Sessions {
-  const s3 = new S3Client({ requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } });
+export function s3Sessions(bucket: string, s3: Pick<S3Client, "send"> = new S3Client({ requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } })): Sessions {
   return {
     get: async (key) => {
       try {
