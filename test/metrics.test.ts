@@ -51,20 +51,20 @@ interface Run {
 }
 
 /** checks fakes the GitHub check runs of o/r, which the comparer reads and settles, and its pull requests' commits. */
-function checks(runs: Run[], pulls: Record<number, { updated: number; commits: string[] }> = {}) {
+function checks(runs: Run[], pulls: Record<number, { updated: number; commits: string[] }> = {}, repo = "r") {
   const reads: string[] = [];
   const gh: GitHub = {
     rest: async (method, path, body: any): Promise<any> => {
       reads.push(`${method} ${path}`);
-      const patch = /^\/repos\/o\/r\/check-runs\/(\d+)$/.exec(path);
+      const patch = new RegExp(`^/repos/o/${repo}/check-runs/(\\d+)$`).exec(path);
       if (method === "PATCH" && patch) {
         runs.find((r) => r.id === Number(patch[1]))!.external_id = body.external_id;
         return { status: 200, data: {} };
       }
-      const listed = /^\/repos\/o\/r\/commits\/(\w+)\/check-runs\?check_name=([^&]+)&filter=all&per_page=100$/.exec(path);
+      const listed = new RegExp(`^/repos/o/${repo}/commits/([\\w-]+)/check-runs\\?check_name=([^&]+)&filter=all&per_page=100$`).exec(path);
       if (method === "GET" && listed) return { status: 200, data: { check_runs: runs.filter((r) => r.head === listed[1] && r.name === decodeURIComponent(listed[2]!)).map((r) => ({ ...r })) } };
-      if (method === "GET" && path === "/repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100") return { status: 200, data: Object.entries(pulls).map(([n, p]) => ({ number: Number(n), updated_at: at(p.updated), head: { sha: p.commits.at(-1) } })) };
-      const commits = /^\/repos\/o\/r\/pulls\/(\d+)\/commits\?per_page=100&page=(\d+)$/.exec(path);
+      if (method === "GET" && path === `/repos/o/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`) return { status: 200, data: Object.entries(pulls).map(([n, p]) => ({ number: Number(n), updated_at: at(p.updated), head: { sha: p.commits.at(-1) } })) };
+      const commits = new RegExp(`^/repos/o/${repo}/pulls/(\\d+)/commits\\?per_page=100&page=(\\d+)$`).exec(path);
       const page = Number(commits?.[2]);
       if (method === "GET" && commits) return { status: 200, data: pulls[Number(commits[1])]!.commits.slice((page - 1) * 100, page * 100).map((sha) => ({ sha })) };
       return { status: 404, data: {} };
@@ -167,4 +167,16 @@ test("comparer resumes after a restart from the recently updated pull requests o
   assert.deepEqual([runs[0]!.external_id, runs[6]!.external_id], ["compare:v1:10", "compare:v1:12"]);
   const text = await m.registry.metrics();
   assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="block",v2="pass"\} 2\n/);
+});
+
+test("comparer resumes a pending review however many other commits the rebuild finds", async () => {
+  const m = metrics();
+  const fakes = ["r0", "r1", "r2"].map((repo) => {
+    const pulls = Object.fromEntries(Array.from({ length: 100 }, (_, n) => [n, { updated: 1000, commits: Array.from({ length: 6 }, (_, k) => `${repo}-${n}-${k}`) }]));
+    return checks(repo === "r0" ? [v2(1, "r0-0-5", 1, "compare:pending"), v1(9, "r0-0-5", 2)] : [], pulls, repo);
+  });
+  const c = comparer(m, cfg, { github: async (_, repo) => fakes[Number(repo.slice(1))]!.gh, bot: async () => "seidroid[bot]", repos: async () => ["r0", "r1", "r2"].map((repo) => ({ owner: "o", repo })) });
+  await c.tick(3000_000);
+  assert.equal(c.waiting, 0);
+  assert.match(await m.registry.metrics(), /seidroid_comparisons_total\{repo="o\/r0",v1="block",v2="pass"\} 1\n/);
 });

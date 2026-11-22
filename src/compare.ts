@@ -89,7 +89,7 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     }
     for (const [key, r] of resuming) {
       try {
-        await rebuild(r);
+        await rebuild(r, slug);
         resuming.delete(key);
       } catch (e) {
         console.log(JSON.stringify({ compare: key, error: e instanceof Error ? e.message : String(e) }));
@@ -104,29 +104,43 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     }
   }
 
-  async function rebuild(r: { owner: string; repo: string; since: number }): Promise<void> {
+  /** rebuild watches each recent commit of r's recently updated pull requests that still has a v2 review waiting for v1. */
+  async function rebuild(r: { owner: string; repo: string; since: number }, slug: string): Promise<void> {
     const gh = await deps.github(r.owner, r.repo);
     const base = `/repos/${r.owner}/${r.repo}`;
     const res = await gh.rest<{ number: number; updated_at: string; head: { sha: string } }[]>("GET", `${base}/pulls?state=all&sort=updated&direction=desc&per_page=${RESUMED_PULLS}`);
     if (res.status !== 200) throw new Error(`could not read the pull requests: ${res.status}`);
+    const recent = new Set<string>();
     for (const p of res.data.filter((p) => Date.parse(p.updated_at) >= r.since)) {
-      watch(r.owner, r.repo, p.head.sha);
+      recent.add(p.head.sha);
       // GitHub lists a pull request's commits oldest first, up to 250.
       const commits = await all<{ sha: string }>(gh, `${base}/pulls/${p.number}/commits`, PULL_COMMIT_PAGES);
-      for (const c of commits.slice(-RESUMED_COMMITS)) watch(r.owner, r.repo, c.sha);
+      for (const c of commits.slice(-RESUMED_COMMITS)) recent.add(c.sha);
     }
+    // Only commits still waiting are watched, so the cap on waiting never evicts one in favour of a settled commit.
+    for (const head of recent) {
+      if ((await shadowRuns(gh, r.owner, r.repo, head, slug)).some((c) => c.external_id!.startsWith(pending()))) watch(r.owner, r.repo, head);
+    }
+  }
+
+  /** shadowRuns lists the completed check runs v2 published in shadow on head. */
+  async function shadowRuns(gh: GitHub, owner: string, repo: string, head: string, slug: string): Promise<CheckRun[]> {
+    return (await checkRuns(gh, owner, repo, head, cfg.checkName, slug, "completed_at")).filter((c) => c.completed_at && c.external_id?.startsWith(COMPARE));
+  }
+
+  /** checkRuns lists app's check runs named name on head, oldest first by the time by, with missing times last. */
+  async function checkRuns(gh: GitHub, owner: string, repo: string, head: string, name: string, app: string, by: "started_at" | "completed_at"): Promise<CheckRun[]> {
+    const time = (t: string | null) => (t ? Date.parse(t) : Infinity);
+    const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `/repos/${owner}/${repo}/commits/${head}/check-runs?check_name=${encodeURIComponent(name)}&filter=all&per_page=100`);
+    if (res.status !== 200) throw new Error(`could not read ${name} on ${head}: ${res.status}`);
+    return res.data.check_runs.filter((c) => c.app?.slug === app).sort((a, b) => time(a[by]) - time(b[by]));
   }
 
   /** pair records every v2 review on head it can settle, and reports whether none is left waiting. */
   async function pair(owner: string, repo: string, head: string, slug: string, now: number): Promise<boolean> {
     const gh = await deps.github(owner, repo);
-    const time = (t: string | null) => (t ? Date.parse(t) : Infinity);
-    const runs = async (name: string, app: string, by: "started_at" | "completed_at") => {
-      const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `/repos/${owner}/${repo}/commits/${head}/check-runs?check_name=${encodeURIComponent(name)}&filter=all&per_page=100`);
-      if (res.status !== 200) throw new Error(`could not read ${name} on ${head}: ${res.status}`);
-      return res.data.check_runs.filter((c) => c.app?.slug === app).sort((a, b) => time(a[by]) - time(b[by]));
-    };
-    const v2 = (await runs(cfg.checkName, slug, "completed_at")).filter((c) => c.completed_at && c.external_id?.startsWith(COMPARE));
+    const runs = (name: string, app: string, by: "started_at" | "completed_at") => checkRuns(gh, owner, repo, head, name, app, by);
+    const v2 = await shadowRuns(gh, owner, repo, head, slug);
     const due = v2.filter((c) => c.external_id!.startsWith(pending()));
     if (!due.length) return true;
     const claimed = new Set(v2.map((c) => /^compare:v1:(\d+)$/.exec(c.external_id!)?.[1]).filter(Boolean).map(Number));
