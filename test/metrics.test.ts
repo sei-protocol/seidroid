@@ -64,8 +64,9 @@ function checks(runs: Run[], pulls: Record<number, { updated: number; commits: s
       const listed = /^\/repos\/o\/r\/commits\/(\w+)\/check-runs\?check_name=([^&]+)&filter=all&per_page=100$/.exec(path);
       if (method === "GET" && listed) return { status: 200, data: { check_runs: runs.filter((r) => r.head === listed[1] && r.name === decodeURIComponent(listed[2]!)).map((r) => ({ ...r })) } };
       if (method === "GET" && path === "/repos/o/r/pulls?state=all&sort=updated&direction=desc&per_page=100") return { status: 200, data: Object.entries(pulls).map(([n, p]) => ({ number: Number(n), updated_at: at(p.updated), head: { sha: p.commits.at(-1) } })) };
-      const commits = /^\/repos\/o\/r\/pulls\/(\d+)\/commits\?per_page=100$/.exec(path);
-      if (method === "GET" && commits) return { status: 200, data: pulls[Number(commits[1])]!.commits.map((sha) => ({ sha })) };
+      const commits = /^\/repos\/o\/r\/pulls\/(\d+)\/commits\?per_page=100&page=(\d+)$/.exec(path);
+      const page = Number(commits?.[2]);
+      if (method === "GET" && commits) return { status: 200, data: pulls[Number(commits[1])]!.commits.slice((page - 1) * 100, page * 100).map((sha) => ({ sha })) };
       return { status: 404, data: {} };
     },
     graphql: async (): Promise<any> => ({}),
@@ -123,18 +124,47 @@ test("comparer waits for v1's job to end, and counts v1 missing once it has wait
   assert.equal(reads.filter((r) => r.startsWith("PATCH")).length, 2);
 });
 
-test("comparer resumes after a restart from recently updated pull requests, counting only reviews still pending", async () => {
+test("comparer waits for the job of v1's repeat review, not an earlier one, before it counts v1's time", async () => {
   const m = metrics();
-  const runs = [v2(1, "h", 1, "compare:pending"), v2(2, "g", 1, "compare:v1:9"), v1(9, "g", 1), v1(10, "h", 2), v2(3, "f", 1, "compare:pending"), v1(11, "f", 2)];
-  const { gh, reads } = checks(runs, { 7: { updated: 1000, commits: ["a", "b", "c", "d", "g", "h"] }, 8: { updated: 999, commits: ["f"] } });
+  const done: Run = { ...v1(20, "h", 0), name: "j", started_at: at(0), completed_at: at(300), app: { slug: "github-actions" } };
+  const running: Run = { ...done, id: 21, status: "in_progress", started_at: at(400), completed_at: null };
+  const runs = [v2(1, "h", 300, "compare:v1:9"), v1(9, "h", 200), running, done, v2(2, "h", 700, "compare:pending:60"), v1(10, "h", 600)];
+  const { gh } = checks(runs);
+  const c = comparer(m, { ...cfg, waitMs: 1000_000 }, { github: async () => gh, bot: async () => "seidroid[bot]" });
+  c.add("o", "r", "h");
+  await c.tick(800_000);
+  assert.equal(c.waiting, 1);
+  Object.assign(running, { status: "completed", completed_at: at(900) });
+  await c.tick(950_000);
+  assert.equal(runs[4]!.external_id, "compare:v1:10");
+  assert.match(await m.registry.metrics(), /seidroid_compared_duration_seconds_sum\{repo="o\/r",reviewer="v1"\} 500\n/);
+});
+
+test("comparer leaves a v1 review further than the wait from a v2 review unpaired, so later pairs do not shift", async () => {
+  const m = metrics();
+  const runs = [v1(9, "h", 1), v2(1, "h", 5000, "compare:pending"), v1(10, "h", 5001, "success", "0 findings")];
+  const { gh } = checks(runs);
   const c = comparer(m, cfg, { github: async () => gh, bot: async () => "seidroid[bot]" });
-  c.resume("o", "r", 3000_000);
-  c.resume("o", "r", 3000_000);
+  c.add("o", "r", "h");
+  await c.tick(5_002_000);
+  assert.equal(runs[1]!.external_id, "compare:v1:10");
+});
+
+test("comparer resumes after a restart from the recently updated pull requests of every repository, counting only reviews still pending", async () => {
+  const m = metrics();
+  const runs = [v2(1, "h", 1, "compare:pending"), v2(2, "g", 1, "compare:v1:9"), v1(9, "g", 1), v1(10, "h", 2), v2(3, "f", 1, "compare:pending"), v1(11, "f", 2), v2(4, "e", 1, "compare:pending"), v1(12, "e", 2)];
+  const long = [...Array.from({ length: 120 }, (_, i) => `x${i}`), "e", "z"];
+  const { gh, reads } = checks(runs, { 7: { updated: 1000, commits: ["a", "b", "c", "d", "g", "h"] }, 8: { updated: 999, commits: ["f"] }, 9: { updated: 1000, commits: long } });
+  let repos = async (): Promise<{ owner: string; repo: string }[]> => Promise.reject(new Error("GitHub is down"));
+  const c = comparer(m, cfg, { github: async () => gh, bot: async () => "seidroid[bot]", repos: () => repos() });
+  await c.tick(3000_000);
+  repos = async () => [{ owner: "o", repo: "r" }];
+  await c.tick(3000_000);
   await c.tick(5000);
   assert.ok(!reads.some((r) => r.includes("/pulls/8/") || r.includes("/commits/a/")));
+  assert.equal(reads.filter((r) => r.startsWith("GET /repos/o/r/pulls?")).length, 1);
   assert.equal(c.waiting, 0);
-  assert.equal(runs[0]!.external_id, "compare:v1:10");
+  assert.deepEqual([runs[0]!.external_id, runs[6]!.external_id], ["compare:v1:10", "compare:v1:12"]);
   const text = await m.registry.metrics();
-  assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="block",v2="pass"\} 1\n/);
-  assert.doesNotMatch(text, /seidroid_comparisons_total\{[^}]*\} 2\n/);
+  assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="block",v2="pass"\} 2\n/);
 });

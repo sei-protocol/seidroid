@@ -31,6 +31,8 @@ export interface Deps {
   verify(token: string): Promise<Claims>;
   github(owner: string, repo: string): Promise<GitHub>;
   bot(): Promise<string>;
+  /** repos lists the repositories the App is installed on, which the comparison looks at again after a restart. */
+  repos?(): Promise<{ owner: string; repo: string }[]>;
   publish: typeof publish;
   /** schedule runs tick every so often, for the comparison with v1. */
   schedule?(tick: () => Promise<void>): void;
@@ -265,7 +267,6 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
       if (compared) {
         cmp.add(owner, repo, body.head);
-        cmp.resume(owner, repo);
       }
       return report;
     },
@@ -381,6 +382,6 @@ if (import.meta.main) {
   if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
-  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS) });
+  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), repos: () => app.repos(cfg.owners), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS) });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }

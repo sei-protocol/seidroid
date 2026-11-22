@@ -1,5 +1,5 @@
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
-import { client, type GitHub } from "./github.ts";
+import { all, client, type GitHub } from "./github.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -38,6 +38,25 @@ export class App {
       this.tokens.set(key, t);
     }
     return client(t.token, this.api);
+  }
+
+  /** repos lists the repositories the App is installed on that belong to one of owners. */
+  async repos(owners: string[]): Promise<{ owner: string; repo: string }[]> {
+    const app = client(this.jwt(), this.api);
+    const out: { owner: string; repo: string }[] = [];
+    for (const inst of await all<{ id: number; account: { login: string } }>(app, "/app/installations")) {
+      if (!owners.includes(inst.account.login)) continue;
+      const res = await app.rest<{ token: string }>("POST", `/app/installations/${inst.id}/access_tokens`);
+      if (res.status !== 201) throw new Error(`could not mint a token for installation ${inst.id}: ${res.status}`);
+      const gh = client(res.data.token, this.api);
+      for (let page = 1; ; page++) {
+        const list = await gh.rest<{ repositories: { name: string; owner: { login: string } }[] }>("GET", `/installation/repositories?per_page=100&page=${page}`);
+        if (list.status !== 200) throw new Error(`could not list the repositories of installation ${inst.id}: ${list.status}`);
+        out.push(...list.data.repositories.map((r) => ({ owner: r.owner.login, repo: r.name })));
+        if (list.data.repositories.length < 100) break;
+      }
+    }
+    return out;
   }
 
   /** bot is the login the App posts as, e.g. seidroid[bot]. */

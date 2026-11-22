@@ -1,4 +1,4 @@
-import type { GitHub } from "./github.ts";
+import { all, type GitHub } from "./github.ts";
 import { verdicts, type Metrics } from "./metrics.ts";
 
 export interface CompareConfig {
@@ -32,16 +32,18 @@ interface CheckRun {
 const MAX_WAITING = 1000;
 const RESUMED_PULLS = 100;
 const RESUMED_COMMITS = 5;
+const PULL_COMMIT_PAGES = 3;
 
 /**
  * comparer pairs each review v2 publishes in shadow with one of v1's on the same commit, in order of completion,
  * and records the pair in m. Where each v2 review stands is kept in its own check run, so a restart loses nothing
- * but the list of commits to look at, which resume rebuilds from the recently updated pull requests.
+ * but the list of commits to look at, which the first tick rebuilds from the recently updated pull requests of every
+ * repository deps.repos lists.
  */
-export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string }, deps: { github(owner: string, repo: string): Promise<GitHub>; bot(): Promise<string> }) {
+export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string }, deps: { github(owner: string, repo: string): Promise<GitHub>; bot(): Promise<string>; repos?(): Promise<{ owner: string; repo: string }[]> }) {
   const waiting = new Map<string, { owner: string; repo: string; head: string }>();
   const resuming = new Map<string, { owner: string; repo: string; since: number }>();
-  const resumed = new Set<string>();
+  let listed = !deps.repos;
   let busy = false;
 
   const watch = (owner: string, repo: string, head: string) => {
@@ -55,14 +57,6 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     /** add looks for v1's verdict on a commit v2 just reviewed in shadow. */
     add(owner: string, repo: string, head: string): void {
       watch(owner, repo, head);
-    },
-
-    /** resume, once per repository, looks again at the latest commits of every pull request updated within twice the wait. */
-    resume(owner: string, repo: string, now = Date.now()): void {
-      const key = `${owner}/${repo}`;
-      if (resumed.has(key)) return;
-      resumed.add(key);
-      resuming.set(key, { owner, repo, since: now - 2 * cfg.waitMs });
     },
 
     /** tick pairs each waiting v2 review with v1's, recording each pair it finds and each v2 review it has waited for too long. */
@@ -85,6 +79,14 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
 
   async function look(now: number): Promise<void> {
     const slug = (await deps.bot()).replace(/\[bot\]$/, "");
+    if (!listed) {
+      try {
+        for (const { owner, repo } of await deps.repos!()) resuming.set(`${owner}/${repo}`, { owner, repo, since: now - 2 * cfg.waitMs });
+        listed = true;
+      } catch (e) {
+        console.log(JSON.stringify({ compare: "repos", error: e instanceof Error ? e.message : String(e) }));
+      }
+    }
     for (const [key, r] of resuming) {
       try {
         await rebuild(r);
@@ -109,39 +111,43 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     if (res.status !== 200) throw new Error(`could not read the pull requests: ${res.status}`);
     for (const p of res.data.filter((p) => Date.parse(p.updated_at) >= r.since)) {
       watch(r.owner, r.repo, p.head.sha);
-      const commits = await gh.rest<{ sha: string }[]>("GET", `${base}/pulls/${p.number}/commits?per_page=100`);
-      if (commits.status !== 200) throw new Error(`could not read the commits of pull request ${p.number}: ${commits.status}`);
-      for (const c of commits.data.slice(-RESUMED_COMMITS)) watch(r.owner, r.repo, c.sha);
+      // GitHub lists a pull request's commits oldest first, up to 250.
+      const commits = await all<{ sha: string }>(gh, `${base}/pulls/${p.number}/commits`, PULL_COMMIT_PAGES);
+      for (const c of commits.slice(-RESUMED_COMMITS)) watch(r.owner, r.repo, c.sha);
     }
   }
 
   /** pair records every v2 review on head it can settle, and reports whether none is left waiting. */
   async function pair(owner: string, repo: string, head: string, slug: string, now: number): Promise<boolean> {
     const gh = await deps.github(owner, repo);
-    const runs = async (name: string, app: string) => {
+    const time = (t: string | null) => (t ? Date.parse(t) : Infinity);
+    const runs = async (name: string, app: string, by: "started_at" | "completed_at") => {
       const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `/repos/${owner}/${repo}/commits/${head}/check-runs?check_name=${encodeURIComponent(name)}&filter=all&per_page=100`);
       if (res.status !== 200) throw new Error(`could not read ${name} on ${head}: ${res.status}`);
-      return res.data.check_runs.filter((c) => c.app?.slug === app).sort((a, b) => (a.completed_at ?? "~").localeCompare(b.completed_at ?? "~"));
+      return res.data.check_runs.filter((c) => c.app?.slug === app).sort((a, b) => time(a[by]) - time(b[by]));
     };
-    const v2 = (await runs(cfg.checkName, slug)).filter((c) => c.completed_at && c.external_id?.startsWith(COMPARE));
+    const v2 = (await runs(cfg.checkName, slug, "completed_at")).filter((c) => c.completed_at && c.external_id?.startsWith(COMPARE));
     const due = v2.filter((c) => c.external_id!.startsWith(pending()));
     if (!due.length) return true;
     const claimed = new Set(v2.map((c) => /^compare:v1:(\d+)$/.exec(c.external_id!)?.[1]).filter(Boolean).map(Number));
-    const v1 = (await runs(cfg.check, slug)).filter((c) => c.status === "completed" && c.completed_at && !claimed.has(c.id));
-    const jobs = v1.length ? await runs(cfg.job, "github-actions") : [];
-    for (const [i, run] of due.entries()) {
+    const v1 = (await runs(cfg.check, slug, "completed_at")).filter((c) => c.status === "completed" && c.completed_at && !claimed.has(c.id));
+    const jobs = v1.length ? await runs(cfg.job, "github-actions", "started_at") : [];
+    for (const run of due) {
       const at = Date.parse(run.completed_at!);
       const late = now - at > cfg.waitMs;
-      const theirs = v1[i];
-      if (!theirs) {
+      // A v1 review further than the wait from this one belongs to another attempt, or to one v2 never published.
+      const i = v1.findIndex((c) => Math.abs(Date.parse(c.completed_at!) - at) <= cfg.waitMs);
+      if (i < 0) {
         if (!late) return false;
         await settle(gh, owner, repo, run, `${COMPARE}missing`);
         record(owner, repo, run);
         continue;
       }
+      const theirs = v1[i]!;
       // v1 publishes its verdict before its job ends, so the job's time waits for the job that published it.
       const job = jobs.filter((j) => j.started_at && j.started_at <= theirs.completed_at!).at(-1);
       if (job && job.status !== "completed" && !late) return false;
+      v1.splice(i, 1);
       await settle(gh, owner, repo, run, `${COMPARE}v1:${theirs.id}`);
       const took = job?.started_at && job.completed_at ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000 : undefined;
       record(owner, repo, run, theirs, took);
