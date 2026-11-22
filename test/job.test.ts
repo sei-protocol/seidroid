@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, changesSince, conversation, earlierFindings, FULL_READ_ABOVE, guard, keepsTranscripts, lastScouted, loadSession, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, saveSession, scout, scoutPlan, service, type Event, type GuardOptions } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, FULL_READ_ABOVE, guard, keepsTranscripts, lastScouted, loadSession, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, saveSession, scout, scoutPlan, service, standingOf, type Event, type GuardOptions, type OwnReviews, type Standing } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -37,10 +37,15 @@ const ask = (body: string, actor = "alice", type = "User"): Event => ({
 });
 const verdict = (state: string) => ({ state, body: `${MARKER.verdict}\nreviewed`, user: { type: "Bot" } });
 const team = async () => ({ actor: true, author: true });
+const unread: OwnReviews = async () => {
+  throw new Error("only shadow reads its own check runs");
+};
+const ownChecks = (standing?: Standing): OwnReviews => async () => standing;
 const outsider = async () => ({ actor: false, author: true });
 
 test("guard admits what v1 admits and nothing more", async () => {
-  const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp][] = [
+  const shadow = { ...opts, shadow: true };
+  const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp, OwnReviews?][] = [
     ["first push", push("opened"), gh(), opts, true, /no review yet/],
     ["a draft", push("opened"), gh({ draft: true }), opts, false, /draft/],
     ["a fork", push("opened"), gh({ head: { sha: "h", repo: { id: 2 } } }), opts, false, /fork/],
@@ -61,19 +66,30 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["no mention", ask("thanks seidroid"), gh(), opts, false, /does not ask/],
     ["a request on a fork", ask("@seidroid review"), gh({ head: { sha: "h", repo: { id: 2 } } }), opts, false, /fork/],
     ["another event", { name: "pull_request_target", actor: "alice", payload: { repository } }, gh(), opts, false, /does not start/],
+    ["v1's review in shadow", push("ready_for_review"), gh({}, [verdict("APPROVED")]), shadow, true, /no review yet/, ownChecks()],
+    ["v1's change request in shadow", push("synchronize"), gh({}, [verdict("CHANGES_REQUESTED")]), shadow, false, /already reviewed/, ownChecks("reviewed")],
+    ["its own review in shadow", push("reopened"), gh(), shadow, false, /already reviewed/, ownChecks("changes_requested")],
+    ["its own change request in shadow", push("synchronize"), gh({}, [verdict("APPROVED")]), shadow, true, /lift/, ownChecks("changes_requested")],
   ];
-  for (const [name, ev, client, o, run, reason] of cases) {
-    const gate = await guard(ev, o, client, ev.actor === "mallory" ? outsider : team);
+  for (const [name, ev, client, o, run, reason, ownReviews = unread] of cases) {
+    const gate = await guard(ev, o, client, ev.actor === "mallory" ? outsider : team, ownReviews);
     assert.equal(gate.run, run, name);
     assert.match(gate.reason, reason, name);
     assert.equal(gate.head, run ? "h" : "", name);
   }
-  const outsiders = await guard(push("opened"), opts, gh(), async () => ({ actor: true, author: false }));
+  const outsiders = await guard(push("opened"), opts, gh(), async () => ({ actor: true, author: false }), unread);
   assert.equal(outsiders.run, false);
   assert.match(outsiders.reason, /bob is not on the team/);
-  const asked = await guard(ask("@seidroid review\nRun go test ./x/"), opts, gh(), team);
+  const asked = await guard(ask("@seidroid review\nRun go test ./x/"), opts, gh(), team, unread);
   assert.equal(asked.ask, "Run go test ./x/");
-  assert.equal((await guard(ask("@seidroid review\nrun it", "renovate[bot]", "Bot"), opts, gh(), team)).ask, "");
+  assert.equal((await guard(ask("@seidroid review\nrun it", "renovate[bot]", "Bot"), opts, gh(), team, unread)).ask, "");
+});
+
+test("standingOf reads seidroid's latest review from the service's history and refuses a service too old to say", () => {
+  assert.equal(standingOf({ conclusion: null }), undefined);
+  assert.equal(standingOf({ conclusion: "failure" }), "changes_requested");
+  for (const conclusion of ["success", "neutral"]) assert.equal(standingOf({ conclusion }), "reviewed");
+  assert.throws(() => standingOf({}), /predates/);
 });
 
 test("besides keeps a review request's text without its command lines", () => {
@@ -101,7 +117,7 @@ test("guard answers a team member's other mentions, outside shadow and never a b
   ];
   for (const [name, ev, client, o, reply, reason] of cases) {
     const asked: (number | undefined)[] = [];
-    const gate = await guard(ev, o, client, async (_pr, comment) => (asked.push(comment), { actor: ev.actor !== "mallory", author: true }));
+    const gate = await guard(ev, o, client, async (_pr, comment) => (asked.push(comment), { actor: ev.actor !== "mallory", author: true }), unread);
     assert.equal(gate.run, false, name);
     assert.equal(gate.reply, reply, name);
     assert.match(gate.reason, reason, name);

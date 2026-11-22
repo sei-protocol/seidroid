@@ -146,10 +146,18 @@ test("publish refuses tokens and requests it cannot trust", async () => {
 
 test("publish records the review and the job's model runs in the metrics, and compares a shadow review with v1's", async () => {
   const checks = `${repo}/commits/${HEAD}/check-runs`;
-  const v1 = { status: "completed", conclusion: "failure", started_at: "2026-11-15T10:00:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "seidroid" }, output: { title: "2 findings" } };
-  const job = { status: "completed", conclusion: "success", started_at: "2026-11-15T09:50:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "github-actions" }, output: { title: null } };
+  const v1 = { id: 1, status: "completed", conclusion: "failure", started_at: "2026-11-15T10:00:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "seidroid" }, output: { title: "2 findings" } };
+  const job = { id: 2, status: "completed", conclusion: "success", started_at: "2026-11-15T09:50:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "github-actions" }, output: { title: null } };
+  const v2 = { id: 3, status: "completed", conclusion: "success", started_at: "2026-11-15T10:01:00Z", completed_at: "2026-11-15T10:01:00Z", external_id: "compare:pending:90", app: { slug: "seidroid" }, output: { title: "2 findings" } };
+  const settled: unknown[] = [];
   const s = await serve(
-    { ...base, [`GET ${checks}?check_name=review&filter=latest`]: ok({ check_runs: [v1] }), [`GET ${checks}?check_name=seidroid-review%20%2F%20Review&filter=latest`]: ok({ check_runs: [job] }) },
+    {
+      ...base,
+      [`GET ${checks}?check_name=review&filter=all&per_page=100`]: ok({ check_runs: [v1] }),
+      [`GET ${checks}?check_name=seidroid-review%20%2F%20Review&filter=all&per_page=100`]: ok({ check_runs: [job] }),
+      [`GET ${checks}?check_name=Seidroid%20Review&filter=all&per_page=100`]: ok({ check_runs: [v2] }),
+      [`PATCH ${repo}/check-runs/3`]: (b) => (settled.push(b), { status: 200, data: {} }),
+    },
     { ...cfg, compare: { check: "review", job: "seidroid-review / Review", waitMs: 60_000 } },
   );
   try {
@@ -160,7 +168,9 @@ test("publish records the review and the job's model runs in the metrics, and co
     ];
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: found }, runs, durationMs: 90_000, session: "unavailable" });
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { failure: "the review did not finish: timed out after 1200s" }, shadow: false });
+    assert.deepEqual(s.published.map((p) => p.target.externalId), ["compare:pending:90", undefined]);
     await s.tick();
+    assert.deepEqual(settled, [{ external_id: "compare:v1:1" }]);
     const m = await s.metrics();
     for (const line of [
       'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="shadow",trigger="push",conclusion="success",settled="review"} 1',
@@ -245,7 +255,7 @@ test("publish refuses a pull request from a fork", async () => {
 });
 
 test("history reads back what this App's latest check run on the newest commit recorded for the pull request", async () => {
-  const run = (slug: string, completed: string | null, text: string | null) => ({ completed_at: completed, app: { slug }, output: { text } });
+  const run = (slug: string, completed: string | null, text: string | null) => ({ conclusion: completed && "failure", completed_at: completed, app: { slug }, output: { text } });
   const record = (detail: string, pr = 7) => `<!-- seidroid-review:findings {"pr":${pr},"findings":[{"file":"a.go","line":3,"severity":"blocker","detail":"${detail}"}]} -->`;
   const runs = (check_runs: object[]) => ok({ check_runs });
   const checks = (sha: string) => `GET ${repo}/commits/${sha}/check-runs?check_name=Seidroid%20Review&filter=all&per_page=100`;
@@ -259,7 +269,7 @@ test("history reads back what this App's latest check run on the newest commit r
   try {
     const r = await s.call("/history", { pr: 7 });
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { threads: [{ id: "", file: "a.go", line: 3, body: "**blocker** — newer", replies: [], resolved: false }] });
+    assert.deepEqual(r.body, { threads: [{ id: "", file: "a.go", line: 3, body: "**blocker** — newer", replies: [], resolved: false }], conclusion: "failure" });
     assert.equal((await s.call("/history", { pr: 7 }, claims({ job_workflow_ref: "sei-protocol/other/.github/workflows/review.yml@main" }))).status, 403);
   } finally {
     s.close();

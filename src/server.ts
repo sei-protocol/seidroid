@@ -5,8 +5,8 @@ import { App } from "./app.ts";
 import { all, type GitHub } from "./github.ts";
 import { githubKeys, verifyToken, type Claims } from "./oidc.ts";
 import { parseAccepted } from "./accepted.ts";
-import { comparer, type CompareConfig } from "./compare.ts";
-import { failureReason, metrics, recordRuns, runStats, verdicts, type Metrics } from "./metrics.ts";
+import { comparer, pending, type CompareConfig } from "./compare.ts";
+import { failureReason, metrics, recordRuns, runStats, type Metrics } from "./metrics.ts";
 import { publish, recordedHistory, type Outcome, type Report } from "./publish.ts";
 import { replyBody } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
@@ -35,6 +35,8 @@ export interface Deps {
   verify(token: string): Promise<Claims>;
   github(owner: string, repo: string): Promise<GitHub>;
   bot(): Promise<string>;
+  /** repos lists the repositories the App is installed on, which the comparison looks at again after a restart. */
+  repos?(): Promise<{ owner: string; repo: string }[]>;
   publish: typeof publish;
   /** schedule runs tick every so often, for the comparison with v1. */
   schedule?(tick: () => Promise<void>): void;
@@ -110,7 +112,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   const prefix = sessionPrefix(cfg.sessionPrefix ?? "");
   const used = new Map<string, number>();
   const m = metrics();
-  const cmp = cfg.compare && comparer(m, cfg.compare, deps);
+  const cmp = cfg.compare && comparer(m, { ...cfg.compare, checkName: cfg.checkName }, deps);
   if (cmp) deps.schedule?.(() => cmp.tick());
 
   const authorize = async (req: IncomingMessage): Promise<{ claims: Claims; gh: GitHub; owner: string; repo: string }> => {
@@ -218,7 +220,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     "POST /history": async (req) => {
       const { gh, owner, repo } = await authorize(req);
       const pr = positive((await json(req)).pr, "pr");
-      return { threads: await recordedHistory(gh, `/repos/${owner}/${repo}`, pr, cfg.checkName, await deps.bot()) };
+      return await recordedHistory(gh, `/repos/${owner}/${repo}`, pr, cfg.checkName, await deps.bot());
     },
 
     "POST /reply": async (req) => {
@@ -313,12 +315,14 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
         if (cmp.data?.status !== "ahead") throw new HttpError(409, `${body.head} is not on pull request ${pr}`);
       }
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow: body.shadow !== false, aiReviewCheck: body.shadow === false && body.aiReviewCheck === true, approve: body.approve === true };
+      const shadow = body.shadow !== false;
+      const compared = cmp && shadow;
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve: body.approve === true, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
       const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
-      if (cmp && target.shadow) {
-        cmp.add({ owner, repo, head: body.head, v2: verdicts(report), v2Seconds: seconds(body.durationMs), at: Date.now() });
+      if (compared) {
+        cmp.add(owner, repo, body.head);
       }
       return report;
     },
@@ -494,6 +498,6 @@ if (import.meta.main) {
   if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
-  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: sessionStore(process.env) });
+  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), repos: () => app.repos(cfg.owners), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: sessionStore(process.env) });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }
