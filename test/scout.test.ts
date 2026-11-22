@@ -4,8 +4,8 @@ import { carriesOn, crossCheck, crossChecks, readingOf, scoutPrompt, settleBySco
 
 const inert = { read: 4, inert: true, findings: [] };
 
-test("readingOf turns a missing or unread submission into a note", () => {
-  assert.equal(readingOf("codex", "timed out").note, "timed out");
+test("readingOf turns a missing or unread submission into a note that names no model", () => {
+  assert.equal(readingOf("the cross-check", "no model credential: openai/gpt-x").note, "it did not finish its reading");
   assert.equal(readingOf("codex", { ...inert, read: 0 }).note, "it could not read the diff");
   assert.deepEqual(readingOf("codex", inert), { name: "codex", note: "", ...inert });
 });

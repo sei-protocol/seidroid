@@ -67,9 +67,12 @@ export const crossCheck = (i: number, n: number): string =>
 /** crossChecks names all n scouts together, as they settle a pull request. */
 export const crossChecks = (n: number): string => (n === 1 ? "the cross-check" : n === 2 ? "both cross-checks" : `all ${n} cross-checks`);
 
-/** readingOf turns a scout's submission, or the reason it has none, into what the review is shown. */
+/**
+ * readingOf turns a scout's submission, or the reason it has none, into what the review is shown.
+ * The reason stays in run.json: a provider's error can name the model.
+ */
 export function readingOf(name: string, got: ScoutSubmission | string): ScoutReading {
-  if (typeof got === "string") return { name, note: got, read: 0, inert: false, findings: [] };
+  if (typeof got === "string") return { name, note: "it did not finish its reading", read: 0, inert: false, findings: [] };
   if (got.read <= 0) return { name, note: "it could not read the diff", read: 0, inert: false, findings: [] };
   return { name, note: "", read: got.read, inert: got.inert, findings: got.findings };
 }
