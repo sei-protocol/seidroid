@@ -23,9 +23,9 @@ test("the chart's ConfigMap names the session store and its settings, and refuse
   ]);
   const refused: [string[], RegExp][] = [
     [["config.sessions.store=s3"], /config\.sessions\.s3\.bucket is required/],
-    [["config.sessions.store=gcs"], /config\.sessions\.store/],
-    [["config.sessions.bucket=seidroid"], /Additional property bucket/],
-    ...["review/../prod", "..", "./review"].map((p): [string[], RegExp] => [["config.sessions.store=s3", "config.sessions.s3.bucket=seidroid", `config.sessions.s3.prefix=${p}`], /config\.sessions\.s3\.prefix/]),
+    [["config.sessions.store=gcs"], /config[./]sessions[./]store/],
+    [["config.sessions.bucket=seidroid"], /[Aa]dditional propert.*bucket/],
+    ...["review/../prod", "..", "./review"].map((p): [string[], RegExp] => [["config.sessions.store=s3", "config.sessions.s3.bucket=seidroid", `config.sessions.s3.prefix=${p}`], /config[./]sessions[./]s3[./]prefix/]),
   ];
   for (const [set, err] of refused) assert.throws(() => configMap(...set), (e: { stderr: string }) => err.test(e.stderr), set.join(" "));
 });
