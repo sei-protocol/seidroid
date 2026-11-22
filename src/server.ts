@@ -414,7 +414,7 @@ export function s3Sessions(bucket: string, s3: Pick<S3Client, "send"> = new S3Cl
         // ListBucket grant scoped by s3:prefix may not count, so a denied read is checked by listing.
         if (e instanceof Error && e.name === "AccessDenied") {
           const listed = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: key, MaxKeys: 1 }));
-          if (!listed.KeyCount) return undefined;
+          if (listed.Contents?.[0]?.Key !== key) return undefined;
         }
         throw e;
       }

@@ -485,9 +485,9 @@ test("sessionStore picks the store SEIDROID_SESSION_STORE names and refuses one 
   assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "gcs", SEIDROID_SESSION_BUCKET: "seidroid" }), /must be s3 or empty, not "gcs"/);
 });
 
-test("an S3 read denied for lack of a listable key is no session, and any other denial is an error", async () => {
+test("an S3 read denied for a key the listing does not hold is no session, and any other denial is an error", async () => {
   const denied = Object.assign(new Error("Access Denied"), { name: "AccessDenied" });
-  const s3 = (listing: () => Promise<{ KeyCount: number }>) =>
+  const s3 = (listing: () => Promise<{ Contents?: { Key: string }[] }>) =>
     s3Sessions("seidroid", {
       send: async (cmd: unknown) => {
         if (cmd instanceof GetObjectCommand) throw denied;
@@ -496,8 +496,9 @@ test("an S3 read denied for lack of a listable key is no session, and any other 
         return listing();
       },
     } as unknown as Pick<S3Client, "send">);
-  assert.equal(await s3(async () => ({ KeyCount: 0 })).get("review/dev/k"), undefined);
-  await assert.rejects(s3(async () => ({ KeyCount: 1 })).get("review/dev/k"), denied);
+  assert.equal(await s3(async () => ({})).get("review/dev/k"), undefined);
+  assert.equal(await s3(async () => ({ Contents: [{ Key: "review/dev/k.bak" }] })).get("review/dev/k"), undefined);
+  await assert.rejects(s3(async () => ({ Contents: [{ Key: "review/dev/k" }] })).get("review/dev/k"), denied);
   const listDenied = new Error("list denied");
   await assert.rejects(s3(async () => { throw listDenied; }).get("review/dev/k"), listDenied);
 });
