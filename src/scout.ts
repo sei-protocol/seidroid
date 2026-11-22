@@ -60,6 +60,13 @@ export function scoutPrompt(req: ScoutRequest): string {
   return prose("scout", { repo: req.repo, pr: req.pr, step, counted: req.since ? `${SINCE}'s` : "the diff's" });
 }
 
+/** crossCheck is the public label of the scout at position i of n in scout-models; nothing posted names its model. */
+export const crossCheck = (i: number, n: number): string =>
+  n === 1 ? "the cross-check" : `cross-check ${i < 26 ? String.fromCharCode(65 + i) : i + 1}`;
+
+/** crossChecks names all n scouts together, as they settle a pull request. */
+export const crossChecks = (n: number): string => (n === 1 ? "the cross-check" : n === 2 ? "both cross-checks" : `all ${n} cross-checks`);
+
 /** readingOf turns a scout's submission, or the reason it has none, into what the review is shown. */
 export function readingOf(name: string, got: ScoutSubmission | string): ScoutReading {
   if (typeof got === "string") return { name, note: got, read: 0, inert: false, findings: [] };
@@ -76,10 +83,9 @@ export function settleByScouts(scouts: readonly ScoutReading[], diffLines: numbe
   if (diffLines <= 0 || scouts.length === 0 || !scouts.every(clean)) {
     return undefined;
   }
-  const who = scouts.map((s) => s.name).join(", ");
   return {
     read: Math.min(...scouts.map((s) => s.read)),
     decision: "approve",
-    summary: prose("settled", { scouts: who }),
+    summary: prose("settled", { scouts: crossChecks(scouts.length) }),
   };
 }

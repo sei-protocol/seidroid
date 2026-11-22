@@ -13,7 +13,7 @@ import { MARKER } from "./render.ts";
 import { hasSession, run, sha256 } from "./run.ts";
 import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
-import { carriesOn, readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
+import { carriesOn, crossCheck, crossChecks, readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
 import { MAX_SESSION, pack, unpack } from "./session.ts";
 import { clip, guidelinesPath } from "./text.ts";
@@ -342,7 +342,7 @@ export async function scout(o: { models: string[]; request: ScoutRequest; work: 
     mkdirSync(o.sessionDir, { recursive: true });
     writeFileSync(path.join(o.sessionDir, SCOUTED), JSON.stringify({ head: o.head, base: o.base, readings }));
   }
-  return { readings: o.models.map((m, i) => readingOf(m, runs[i].got)), since: runs.some((r) => r.since) };
+  return { readings: o.models.map((_, i) => readingOf(crossCheck(i, o.models.length), runs[i].got)), since: runs.some((r) => r.since) };
 }
 
 /** keepsTranscripts is whether the runs keep their transcripts: only for a repository known to be private, since anyone can read a public one's artifacts. */
@@ -554,7 +554,7 @@ async function review(o: Record<string, string>): Promise<void> {
     // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
     const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
     if (settled) {
-      outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
+      outcome = { submission: settled, settledBy: crossChecks(scouts.length) };
     } else {
       const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
       const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };

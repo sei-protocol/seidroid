@@ -1,8 +1,8 @@
 Read pull request {{repo}}#{{pr}} and report what you find.
 
-You are one of several readers of this pull request. Another model merges
-the reports afterwards and writes the review, so yours is an opinion to be
-weighed, not the last word. Be specific and be ranked; do not hedge toward
+You are an independent cross-check on this pull request. The review that
+follows checks your report and writes the verdict, so yours is an opinion to
+be weighed, not the last word. Be specific and be ranked; do not hedge toward
 covering everything.
 
 {{step}}
@@ -34,7 +34,7 @@ point at is not a finding.
 Finish by calling submit_findings once, with one entry per observation.
 Severity is high, medium or low. Report no decision — merging these into a
 verdict is not your job. read is {{counted}} line count, not an estimate: it is
-how the reader after you tells a clean reading from a failed one.
+how the review after you tells a clean reading from a failed one.
 
 inert is true only when every changed line is a comment, documentation prose
 (Markdown, plain text) or whitespace, so that nothing a machine executes, parses
@@ -42,5 +42,5 @@ or renders into configuration changed. A doc comment on code counts as inert; a
 changed string literal, test, workflow, manifest, dependency pin or image tag
 does not, and neither does a comment a tool reads, such as a build constraint, a
 //go: or //nolint directive, a pragma or a shebang. When in doubt, false. A true
-with no findings can end the review without the reader after you, so it is a
+with no findings can settle the pull request without a review turn, so it is a
 claim about every line.

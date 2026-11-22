@@ -73,7 +73,7 @@ const submission = { read: 1, decision: "approve", summary: "Fine." };
 test("publish rebuilds the verdict from the base commit and publishes as the run that asked", async () => {
   const s = await serve(base);
   try {
-    const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission, settledBy: "codex\nscout" } });
+    const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission, settledBy: "both\ncross-checks" } });
     assert.equal(r.status, 200);
     const [{ target, outcome }] = s.published as [{ target: Target; outcome: any }];
     assert.equal(target.runUrl, "https://github.com/sei-protocol/sei-chain/actions/runs/9/attempts/2");
@@ -81,7 +81,7 @@ test("publish rebuilds the verdict from the base commit and publishes as the run
     assert.equal(target.aiReviewCheck, false);
     assert.equal(target.approve, false);
     assert.deepEqual(outcome.verdict.accepted, ["the legacy store keeps its lock"]);
-    assert.equal(outcome.verdict.settledBy, "codex scout");
+    assert.equal(outcome.verdict.settledBy, "both cross-checks");
 
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission: { decision: "lgtm" } } });
     assert.match((s.published[1]!.outcome as { failure: string }).failure, /broke the contract/);

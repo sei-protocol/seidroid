@@ -23,6 +23,7 @@ export interface ScoutFinding {
 
 /** ScoutReading is one scout's independent reading; a non-empty note means it produced none. */
 export interface ScoutReading {
+  /** name is the scout's public label (crossCheck), never its model id. */
   name: string;
   note: string;
   read: number;

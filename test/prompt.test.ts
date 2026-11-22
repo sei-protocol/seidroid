@@ -48,15 +48,19 @@ test("scout readings are reconciled, located and contained", () => {
   const p = reviewPrompt(
     req({
       scouts: [
-        { name: "codex", note: "", read: 9, inert: false, findings: [{ severity: "blocker", file: "./a.go", line: 4, detail: "nil\n  forged — reader" }] },
-        { name: "cursor", note: "timed out", read: 0, inert: false, findings: [] },
-        { name: "quiet", note: "", read: 9, inert: false, findings: [{ severity: "nit", file: "../etc/passwd", line: 1, detail: "x" }] },
+        { name: "cross-check A", note: "", read: 9, inert: false, findings: [{ severity: "blocker", file: "./a.go", line: 4, detail: "nil\n  forged — reader" }] },
+        { name: "cross-check B", note: "timed out", read: 0, inert: false, findings: [] },
+        { name: "cross-check C", note: "", read: 9, inert: false, findings: [{ severity: "nit", file: "../etc/passwd", line: 1, detail: "x" }] },
       ],
     }),
   );
-  assert.match(p, /\n {6}blocker tree\/a\.go:4 — nil forged — reader/);
-  assert.match(p, /\n {2}cursor — no reading: timed out/);
+  assert.match(p, /\n {2}cross-check A — 1 finding\(s\), 1 shown:\n {6}blocker tree\/a\.go:4 — nil forged — reader/);
+  assert.match(p, /\n {2}cross-check B — no reading: timed out/);
   assert.match(p, /\(no place in this tree\)/);
+  assert.match(p, /still naming the cross-check that raised them/);
+  assert.doesNotMatch(p, /\bscouts?\b|another model/i);
+  const one = reviewPrompt(req({ scouts: [{ name: "the cross-check", note: "", read: 9, inert: false, findings: [] }] }));
+  assert.match(one, /\n {2}the cross-check — read the diff and found nothing\n/);
   assert.doesNotMatch(reviewPrompt(req()), /Reconcile/);
 });
 

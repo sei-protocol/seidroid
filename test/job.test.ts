@@ -341,11 +341,11 @@ test("scout keeps a reading when nothing changed since it, and records the new h
   mkdirSync(sessionDir);
   writeFileSync(path.join(sessionDir, "s.jsonl"), "{}\n");
   const reading = { read: 2, inert: false, findings: [{ file: "pr", line: 1, severity: "high" as const, detail: "wrong" }] };
-  writeFileSync(path.join(sessionDir, "scouts.json"), JSON.stringify({ head: h.head, base: h.moved, readings: { m: reading } }));
-  const got = await scout({ models: ["m"], request: { repo: "o/r", pr: 7, diffLines: 2 }, work, out: path.join(work, "out"), sessionDir, base: h.moved, head: h.head, thinking: "high", timeoutMs: 1, transcript: false });
+  writeFileSync(path.join(sessionDir, "scouts.json"), JSON.stringify({ head: h.head, base: h.moved, readings: { "openai/m": reading, n: reading } }));
+  const got = await scout({ models: ["openai/m", "n"], request: { repo: "o/r", pr: 7, diffLines: 2 }, work, out: path.join(work, "out"), sessionDir, base: h.moved, head: h.head, thinking: "high", timeoutMs: 1, transcript: false });
   assert.equal(got.since, true);
-  assert.deepEqual(got.readings, [{ name: "m", note: "", ...reading }]);
-  assert.deepEqual(JSON.parse(readFileSync(path.join(sessionDir, "scouts.json"), "utf8")), { head: h.head, base: h.moved, readings: { m: reading } });
+  assert.deepEqual(got.readings, [{ name: "cross-check A", note: "", ...reading }, { name: "cross-check B", note: "", ...reading }]);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(sessionDir, "scouts.json"), "utf8")), { head: h.head, base: h.moved, readings: { "openai/m": reading, n: reading } });
 });
 
 test("readsSince only for a change that is small next to a diff of at most FULL_READ_ABOVE lines", () => {
