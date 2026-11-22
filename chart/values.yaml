@@ -49,7 +49,8 @@ config:
 # entries. The chart's own settings win over the same key in one of these.
 # SEIDROID_SESSION_BUCKET names the S3 bucket that keeps each pull request's
 # review session, with AWS_REGION its region; without it the service keeps none
-# and every review starts cold.
+# and every review starts cold. The pod needs s3:GetObject and s3:PutObject on
+# the bucket's objects, and s3:ListBucket so a missing session reads as none.
 envFrom: []
 
 serviceAccount:

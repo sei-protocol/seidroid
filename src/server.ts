@@ -379,7 +379,7 @@ function observe(m: Metrics, claims: Claims, shadow: boolean, includeNits: boole
 
 /** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
 function s3Sessions(bucket: string): Sessions {
-  const s3 = new S3Client({});
+  const s3 = new S3Client({ requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } });
   return {
     get: async (key) => {
       try {

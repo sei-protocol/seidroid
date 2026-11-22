@@ -525,23 +525,27 @@ async function review(o: Record<string, string>): Promise<void> {
   const sessionDir = o["session-dir"] || undefined;
   const of = { pr, comment: Number(o.comment) || 0, shadow: o.shadow !== "false" };
   const session = sessionDir ? await loadSession(o.service, of, sessionDir) : "off";
-  const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
-  // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
-  const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
   const includeNits = pull.labels.some((l: { name: string }) => l.name === o["nitpick-label"]);
   let outcome: unknown;
-  if (settled) {
-    outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
-  } else {
-    const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
-    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
-    const dir = path.join(o.out, "review");
-    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
-    const s = submitted(dir);
-    outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
+  // The session is kept even when the review fails, so readings already made carry on.
+  try {
+    const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
+    // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
+    const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
+    if (settled) {
+      outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
+    } else {
+      const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
+      const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
+      const dir = path.join(o.out, "review");
+      await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
+      const s = submitted(dir);
+      outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
+    }
+    if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
+  } finally {
+    if (sessionDir && session !== "off") await saveSession(o.service, of, sessionDir);
   }
-  if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
-  if (sessionDir && session !== "off") await saveSession(o.service, of, sessionDir);
   const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started, session });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
