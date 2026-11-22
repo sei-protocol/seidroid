@@ -45,15 +45,21 @@ config:
     job: seidroid-review / Review
     waitMinutes: 180
   # Where the service keeps each pull request's review session, so a follow-up
-  # review or reply carries on from the last one: an S3 bucket, the key prefix
-  # every session goes under, and the bucket's region. An empty bucket keeps
-  # none, and every review starts cold. The pod needs s3:GetObject and
-  # s3:PutObject under the prefix, and s3:ListBucket on it so a missing session
-  # reads as none.
+  # review or reply carries on from the last one.
   sessions:
-    bucket: ""
-    prefix: ""
-    region: ""
+    # The backend that keeps them: s3, or empty to keep none, so every review
+    # starts cold.
+    store: ""
+    # Settings for store: s3. The pod needs s3:GetObject and s3:PutObject under
+    # the prefix, and s3:ListBucket on it so a missing session reads as none.
+    s3:
+      # The bucket. Required with store: s3.
+      bucket: ""
+      # The key prefix every session goes under, such as review/dev, with no .
+      # or .. segments. Empty keeps them at the top of the bucket.
+      prefix: ""
+      # The bucket's region. Empty leaves it to the pod's AWS environment.
+      region: ""
 
 # More ConfigMaps or Secrets to load settings from, as container envFrom
 # entries. The chart's own settings win over the same key in one of these.

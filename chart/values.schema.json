@@ -196,24 +196,40 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "bucket",
-            "prefix",
-            "region"
+            "store",
+            "s3"
           ],
           "properties": {
-            "bucket": {
-              "type": "string",
-              "pattern": "^([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])?$"
+            "store": {
+              "enum": [
+                "",
+                "s3"
+              ]
             },
-            "prefix": {
-              "type": "string",
-              "not": {
-                "pattern": "(^|/)\\.\\.?(/|$)"
+            "s3": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bucket",
+                "prefix",
+                "region"
+              ],
+              "properties": {
+                "bucket": {
+                  "type": "string",
+                  "pattern": "^([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])?$"
+                },
+                "prefix": {
+                  "type": "string",
+                  "not": {
+                    "pattern": "(^|/)\\.\\.?(/|$)"
+                  }
+                },
+                "region": {
+                  "type": "string",
+                  "pattern": "^([a-z]{2}(-[a-z]+)+-[0-9]+)?$"
+                }
               }
-            },
-            "region": {
-              "type": "string",
-              "pattern": "^([a-z]{2}(-[a-z]+)+-[0-9]+)?$"
             }
           }
         }

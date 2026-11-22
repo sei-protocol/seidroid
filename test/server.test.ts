@@ -8,7 +8,7 @@ import path from "node:path";
 import type { GitHub, Response } from "../src/github.ts";
 import type { Claims } from "../src/oidc.ts";
 import type { Outcome, Target } from "../src/publish.ts";
-import { handler, type Config, type Sessions } from "../src/server.ts";
+import { handler, sessionStore, type Config, type Sessions } from "../src/server.ts";
 import { MAX_SESSION, pack } from "../src/session.ts";
 
 const cfg: Config = { owners: ["sei-protocol"], workflow: "sei-protocol/seidroid/.github/workflows/review.yml", trunk: "main", team: "sei-protocol/eng", bots: ["dependabot[bot]"], checkName: "Seidroid Review" };
@@ -473,4 +473,12 @@ test("session keeps one session per admitted run's repository, pull request and 
   } finally {
     off.close();
   }
+});
+
+test("sessionStore picks the store SEIDROID_SESSION_STORE names and refuses one it cannot run", () => {
+  assert.equal(sessionStore({ SEIDROID_SESSION_BUCKET: "seidroid" }), undefined);
+  assert.equal(sessionStore({ SEIDROID_SESSION_STORE: "" }), undefined);
+  assert.equal(typeof sessionStore({ SEIDROID_SESSION_STORE: "s3", SEIDROID_SESSION_BUCKET: "seidroid" })?.get, "function");
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "s3" }), /SEIDROID_SESSION_BUCKET is not set/);
+  assert.throws(() => sessionStore({ SEIDROID_SESSION_STORE: "gcs", SEIDROID_SESSION_BUCKET: "seidroid" }), /must be s3 or empty, not "gcs"/);
 });

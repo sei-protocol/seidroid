@@ -387,6 +387,17 @@ export function sessionPrefix(raw: string): string {
   return segments.map((s) => `${s}/`).join("");
 }
 
+/** sessionStore is the session store SEIDROID_SESSION_STORE names in vars, or none when it is empty. */
+export function sessionStore(vars: Record<string, string | undefined>): Sessions | undefined {
+  const store = vars.SEIDROID_SESSION_STORE ?? "";
+  if (store === "") return undefined;
+  if (store === "s3") {
+    if (!vars.SEIDROID_SESSION_BUCKET) throw new Error("SEIDROID_SESSION_BUCKET is not set");
+    return s3Sessions(vars.SEIDROID_SESSION_BUCKET);
+  }
+  throw new Error(`SEIDROID_SESSION_STORE must be s3 or empty, not ${JSON.stringify(store)}`);
+}
+
 /** s3Sessions keeps sessions in an S3 bucket, with whatever credentials the pod is given. */
 function s3Sessions(bucket: string): Sessions {
   const s3 = new S3Client({ requestHandler: { connectionTimeout: 5_000, requestTimeout: 30_000 } });
@@ -481,7 +492,6 @@ if (import.meta.main) {
   if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
-  const bucket = env("SEIDROID_SESSION_BUCKET", "");
-  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: bucket ? s3Sessions(bucket) : undefined });
+  const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: sessionStore(process.env) });
   createServer((req, res) => void serve(req, res)).listen(Number(env("PORT", "8080")));
 }

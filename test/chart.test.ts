@@ -10,17 +10,22 @@ test("the chart's HTTPRoute exposes every route the service serves", () => {
   assert.deepEqual([...(routed ?? [])].sort(), [...new Set(served)].sort());
 });
 
-test("the chart's ConfigMap keeps sessions only when given a bucket, and refuses a prefix that climbs", () => {
+test("the chart's ConfigMap names the session store and its settings, and refuses ones that cannot work", () => {
   const configMap = (...set: string[]) =>
-    execFileSync("helm", ["template", "s", "chart", "--show-only", "templates/configmap.yaml", "--set", "config.team=org/team", ...set.flatMap((s) => ["--set", s])], { encoding: "utf8" });
+    execFileSync("helm", ["template", "s", "chart", "--show-only", "templates/configmap.yaml", "--set", "config.team=org/team", ...set.flatMap((s) => ["--set", s])], { encoding: "utf8", stdio: "pipe" });
   const sessionKeys = (yaml: string) => yaml.match(/^ {2}(SEIDROID_SESSION_\w+|AWS_REGION): .*$/gm) ?? [];
-  assert.deepEqual(sessionKeys(configMap("config.sessions.prefix=review/dev", "config.sessions.region=us-east-2")), []);
-  assert.deepEqual(sessionKeys(configMap("config.sessions.bucket=seidroid", "config.sessions.prefix=review/dev", "config.sessions.region=us-east-2")), [
+  assert.deepEqual(sessionKeys(configMap("config.sessions.s3.bucket=seidroid")), ['  SEIDROID_SESSION_STORE: ""']);
+  assert.deepEqual(sessionKeys(configMap("config.sessions.store=s3", "config.sessions.s3.bucket=seidroid", "config.sessions.s3.prefix=review/dev", "config.sessions.s3.region=us-east-2")), [
+    '  SEIDROID_SESSION_STORE: "s3"',
     '  SEIDROID_SESSION_BUCKET: "seidroid"',
     '  SEIDROID_SESSION_PREFIX: "review/dev"',
     '  AWS_REGION: "us-east-2"',
   ]);
-  for (const prefix of ["review/../prod", "..", "./review"]) {
-    assert.throws(() => configMap("config.sessions.bucket=seidroid", `config.sessions.prefix=${prefix}`), /config\.sessions\.prefix/);
-  }
+  const refused: [string[], RegExp][] = [
+    [["config.sessions.store=s3"], /config\.sessions\.s3\.bucket is required/],
+    [["config.sessions.store=gcs"], /config\.sessions\.store/],
+    [["config.sessions.bucket=seidroid"], /Additional property bucket/],
+    ...["review/../prod", "..", "./review"].map((p): [string[], RegExp] => [["config.sessions.store=s3", "config.sessions.s3.bucket=seidroid", `config.sessions.s3.prefix=${p}`], /config\.sessions\.s3\.prefix/]),
+  ];
+  for (const [set, err] of refused) assert.throws(() => configMap(...set), (e: { stderr: string }) => err.test(e.stderr), set.join(" "));
 });

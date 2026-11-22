@@ -17,10 +17,11 @@ data:
   SEIDROID_COMPARE_WAIT_MINUTES: {{ .compare.waitMinutes | quote }}
   {{- end }}
   {{- with .Values.config.sessions }}
-  {{- if .bucket }}
-  SEIDROID_SESSION_BUCKET: {{ .bucket | quote }}
-  SEIDROID_SESSION_PREFIX: {{ .prefix | quote }}
-  {{- with .region }}
+  SEIDROID_SESSION_STORE: {{ .store | quote }}
+  {{- if eq .store "s3" }}
+  SEIDROID_SESSION_BUCKET: {{ required "config.sessions.s3.bucket is required with config.sessions.store s3" .s3.bucket | quote }}
+  SEIDROID_SESSION_PREFIX: {{ .s3.prefix | quote }}
+  {{- with .s3.region }}
   AWS_REGION: {{ . | quote }}
   {{- end }}
   {{- end }}
