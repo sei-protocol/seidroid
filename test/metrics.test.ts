@@ -157,10 +157,22 @@ test("comparer pairs a v1 review with the nearest v2 review, so one v1 never pub
   const c = comparer(m, cfg, { github: async () => gh, bot: async () => "seidroid[bot]" });
   c.add("o", "r", "h");
   await c.tick(600_000);
-  assert.deepEqual([runs[0]!.external_id, runs[1]!.external_id], ["compare:pending", "compare:v1:9"]);
-  assert.equal(c.waiting, 1);
+  assert.deepEqual([runs[0]!.external_id, runs[1]!.external_id], ["compare:pending", "compare:pending"]);
   await c.tick(1_020_000);
-  assert.equal(runs[0]!.external_id, "compare:missing");
+  assert.deepEqual([runs[0]!.external_id, runs[1]!.external_id], ["compare:missing", "compare:v1:9"]);
+  assert.equal(c.waiting, 0);
+});
+
+test("comparer never crosses pairs, however v1's reviews fall between ticks", async () => {
+  const m = metrics();
+  const runs = [v2(1, "h", 10, "compare:pending"), v2(2, "h", 20, "compare:pending"), v1(9, "h", 18)];
+  const { gh } = checks(runs);
+  const c = comparer(m, cfg, { github: async () => gh, bot: async () => "seidroid[bot]" });
+  c.add("o", "r", "h");
+  await c.tick(19_000);
+  runs.push(v1(10, "h", 21));
+  await c.tick(22_000);
+  assert.deepEqual([runs[0]!.external_id, runs[1]!.external_id], ["compare:v1:9", "compare:v1:10"]);
   assert.equal(c.waiting, 0);
 });
 

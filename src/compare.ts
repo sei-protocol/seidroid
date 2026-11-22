@@ -35,6 +35,30 @@ const RESUMED_COMMITS = 5;
 const PULL_COMMIT_PAGES = 3;
 
 /**
+ * align pairs the v2 and v1 reviews of one commit, each sorted by completion, without crossing pairs and only within
+ * waitMs of each other, so that the total time between partners plus waitMs for each review left unpaired is least.
+ * It returns each v2 review's partner, earlier v2 reviews winning ties.
+ */
+function align<T extends { completed_at: string | null }>(v2: T[], v1: T[], waitMs: number): (T | undefined)[] {
+  const apart = (i: number, j: number) => Math.abs(Date.parse(v1[j]!.completed_at!) - Date.parse(v2[i]!.completed_at!));
+  // cost[i][j] is the least cost of aligning v2 from i and v1 from j.
+  const cost = Array.from({ length: v2.length + 1 }, (_, i) => Array.from({ length: v1.length + 1 }, (_, j) => (v2.length - i + v1.length - j) * waitMs));
+  for (let i = v2.length - 1; i >= 0; i--) {
+    for (let j = v1.length - 1; j >= 0; j--) {
+      const skip = waitMs + Math.min(cost[i + 1]![j]!, cost[i]![j + 1]!);
+      cost[i]![j] = apart(i, j) <= waitMs ? Math.min(apart(i, j) + cost[i + 1]![j + 1]!, skip) : skip;
+    }
+  }
+  const out: (T | undefined)[] = [];
+  for (let i = 0, j = 0; i < v2.length; ) {
+    if (j < v1.length && apart(i, j) <= waitMs && apart(i, j) + cost[i + 1]![j + 1]! === cost[i]![j]) out[i++] = v1[j++];
+    else if (j < v1.length && waitMs + cost[i]![j + 1]! === cost[i]![j]) j++;
+    else out[i++] = undefined;
+  }
+  return out;
+}
+
+/**
  * comparer pairs each review v2 publishes in shadow with one of v1's on the same commit, in order of completion,
  * and records the pair in m. Where each v2 review stands is kept in its own check run, so a restart loses nothing
  * but the list of commits to look at, which the first tick rebuilds from the recently updated pull requests of every
@@ -144,37 +168,31 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     const due = v2.filter((c) => c.external_id!.startsWith(pending()));
     if (!due.length) return true;
     const claimed = new Set(v2.map((c) => /^compare:v1:(\d+)$/.exec(c.external_id!)?.[1]).filter(Boolean).map(Number));
-    const v1 = (await runs(cfg.check, slug, "completed_at")).filter((c) => c.status === "completed" && c.completed_at && !claimed.has(c.id));
+    const theirs = (await runs(cfg.check, slug, "completed_at")).filter((c) => c.status === "completed" && c.completed_at);
+    // Pairs never cross, so a v1 review completed before the last one already paired is left unpaired.
+    const after = Math.max(-Infinity, ...theirs.filter((c) => claimed.has(c.id)).map((c) => Date.parse(c.completed_at!)));
+    const v1 = theirs.filter((c) => !claimed.has(c.id) && Date.parse(c.completed_at!) > after);
     const jobs = v1.length ? await runs(cfg.job, "github-actions", "started_at") : [];
-    const open = new Set(due);
-    const apart = (a: CheckRun, b: CheckRun) => Math.abs(Date.parse(a.completed_at!) - Date.parse(b.completed_at!));
-    let left = false;
-    for (const run of due) {
+    const partners = align(due, v1, cfg.waitMs);
+    // Each review is settled in order of completion, so one still waiting for v1 holds back the later ones, whose
+    // partners may yet change.
+    for (const [k, run] of due.entries()) {
       const late = now - Date.parse(run.completed_at!) > cfg.waitMs;
-      // A v1 review further than the wait belongs to another attempt, or to one v2 never published, and one nearer
-      // another v2 review still waiting belongs to that one.
-      const i = v1.findIndex((c) => apart(c, run) <= cfg.waitMs && ![...open].some((o) => o !== run && apart(c, o) < apart(c, run)));
-      if (i < 0) {
-        if (!late) {
-          left = true;
-          continue;
-        }
-        open.delete(run);
+      const partner = partners[k];
+      if (!partner) {
+        if (!late) return false;
         await settle(gh, owner, repo, run, `${COMPARE}missing`);
         record(owner, repo, run);
         continue;
       }
-      const theirs = v1[i]!;
       // v1 publishes its verdict before its job ends, so the job's time waits for the job that published it.
-      const job = jobs.filter((j) => j.started_at && j.started_at <= theirs.completed_at!).at(-1);
+      const job = jobs.filter((j) => j.started_at && j.started_at <= partner.completed_at!).at(-1);
       if (job && job.status !== "completed" && !late) return false;
-      v1.splice(i, 1);
-      open.delete(run);
-      await settle(gh, owner, repo, run, `${COMPARE}v1:${theirs.id}`);
+      await settle(gh, owner, repo, run, `${COMPARE}v1:${partner.id}`);
       const took = job?.started_at && job.completed_at ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000 : undefined;
-      record(owner, repo, run, theirs, took);
+      record(owner, repo, run, partner, took);
     }
-    return !left;
+    return true;
   }
 
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {
