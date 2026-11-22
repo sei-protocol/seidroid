@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -15,6 +15,7 @@ import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { carriesOn, readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
+import { MAX_SESSION, pack, unpack } from "./session.ts";
 import { clip, guidelinesPath } from "./text.ts";
 
 /** Event is the part of a workflow run's trigger the guard reads. */
@@ -266,11 +267,15 @@ export function changesSince(tree: string, last: Scouted, base: string, head: st
   }
 }
 
-/** MAX_SINCE is the most changed lines a scout reads on their own rather than reading the whole diff again. */
-const MAX_SINCE = 400;
+/**
+ * FULL_READ_ABOVE is the most changed lines a pull request may have for a scout to read only what
+ * changed since its last reading; above it, a scout that reads only the change anchors on what it
+ * found before and misses what reading the whole diff again finds.
+ */
+export const FULL_READ_ABOVE = 500;
 
-/** readsSince is whether a scout reads only a change of changed lines rather than all diffLines again: when it is small on its own and next to the diff. */
-export const readsSince = (changed: number, diffLines: number): boolean => changed <= Math.min(MAX_SINCE, diffLines / 4);
+/** readsSince is whether a scout reads only a change of changed lines rather than all diffLines again: when the diff is at most FULL_READ_ABOVE and the change small next to it. */
+export const readsSince = (changed: number, diffLines: number): boolean => diffLines <= FULL_READ_ABOVE && changed <= diffLines / 4;
 
 /**
  * scoutPlan is how a scout that read an earlier head reads this one, given what changed since
@@ -443,6 +448,63 @@ function shellHome(o: Record<string, string>, work: string): string | undefined 
   return o.home;
 }
 
+/** SessionState is how a run got the pull request's session: restored, none kept yet, off when the service keeps none, or unavailable. */
+export type SessionState = "restored" | "none" | "off" | "unavailable";
+
+/** SessionOf names the pull request's session to the service: a comment's run names its comment, and shadow and live sessions are kept apart. */
+export interface SessionOf {
+  pr: number;
+  comment: number;
+  shadow: boolean;
+}
+
+/** Refused is the service turning a run away, which no session failure may hide. */
+class Refused extends Error {}
+
+async function sessionCall(url: string, method: "GET" | "PUT", of: SessionOf, body?: Buffer): Promise<Response> {
+  const at = new URL("/session", url);
+  at.search = new URLSearchParams({ pr: String(of.pr), comment: String(of.comment), shadow: String(of.shadow) }).toString();
+  const res = await fetch(at, { method, headers: { Authorization: `Bearer ${await oidc(new URL(url).origin)}` }, body: body && new Uint8Array(body), signal: AbortSignal.timeout(60_000) });
+  if (res.status === 401 || res.status === 403) throw new Refused(`seidroid /session answered ${res.status}: ${((await res.json().catch(() => ({}))) as any).error ?? ""}`);
+  return res;
+}
+
+/**
+ * loadSession unpacks the pull request's kept session into dir and says how it went. The session
+ * only carries a review on, so when it cannot be had the run starts cold in an empty dir; only the
+ * service refusing the run fails it.
+ */
+export async function loadSession(url: string, of: SessionOf, dir: string): Promise<SessionState> {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  try {
+    const res = await sessionCall(url, "GET", of);
+    if (res.status === 404) return "none";
+    if (res.status === 501) return "off";
+    if (!res.ok) throw new Error(`seidroid /session answered ${res.status}`);
+    unpack(Buffer.from(await res.arrayBuffer()), dir);
+    return "restored";
+  } catch (e) {
+    if (e instanceof Refused) throw e;
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    console.log(`::warning::could not restore pull request ${of.pr}'s session, so this run starts cold: ${e instanceof Error ? e.message : String(e)}`);
+    return "unavailable";
+  }
+}
+
+/** saveSession keeps dir as the pull request's session for its next run, and only warns when it cannot. */
+export async function saveSession(url: string, of: SessionOf, dir: string): Promise<void> {
+  try {
+    const packed = pack(dir);
+    if (packed.length > MAX_SESSION) throw new Error(`it packs to ${packed.length} bytes, over ${MAX_SESSION}`);
+    const res = await sessionCall(url, "PUT", of, packed);
+    if (!res.ok) throw new Error(`seidroid answered ${res.status}: ${((await res.json().catch(() => ({}))) as any).error ?? ""}`);
+  } catch (e) {
+    console.log(`::warning::could not keep pull request ${of.pr}'s session: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 /** review runs the scouts, then the review unless the scouts settle it, and publishes the outcome through the service. */
 async function review(o: Record<string, string>): Promise<void> {
   const [owner, repo] = process.env.GITHUB_REPOSITORY!.split("/");
@@ -461,23 +523,30 @@ async function review(o: Record<string, string>): Promise<void> {
   const transcript = keepsTranscripts(o);
 
   const sessionDir = o["session-dir"] || undefined;
-  const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
-  // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
-  const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
+  const of = { pr, comment: Number(o.comment) || 0, shadow: o.shadow !== "false" };
+  const session = sessionDir ? await loadSession(o.service, of, sessionDir) : "off";
   const includeNits = pull.labels.some((l: { name: string }) => l.name === o["nitpick-label"]);
   let outcome: unknown;
-  if (settled) {
-    outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
-  } else {
-    const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
-    const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
-    const dir = path.join(o.out, "review");
-    await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
-    const s = submitted(dir);
-    outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
+  // The session is kept even when the review fails, so readings already made carry on.
+  try {
+    const { readings: scouts, since } = await scout({ models: lines(o["scout-models"]), request: { repo: `${owner}/${repo}`, pr, diffLines }, work, out: o.out, sessionDir, base, head: pull.head.sha, thinking: o.thinking, timeoutMs, transcript });
+    // A request with text of its own goes to the review, the only role that reads it, and only readings of this head's whole diff settle one.
+    const settled = o.ask || since ? undefined : settleByScouts(scouts, diffLines);
+    if (settled) {
+      outcome = { submission: settled, settledBy: scouts.map((s) => s.name).join(", ") };
+    } else {
+      const threads = await earlierFindings(gh, o.service, owner, repo, pr, o.shadow !== "false");
+      const request: Request = { repo: `${owner}/${repo}`, pr, diffLines, hasTree: true, hasStandards, hasShell: home !== undefined, includeNits, extraInstructions: o["extra-instructions"] || undefined, ask: o.ask || undefined, scouts, threads };
+      const dir = path.join(o.out, "review");
+      await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
+      const s = submitted(dir);
+      outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
+    }
+    if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
+  } finally {
+    if (sessionDir && session !== "off") await saveSession(o.service, of, sessionDir);
   }
-  if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
-  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started });
+  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started, session });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
@@ -499,7 +568,9 @@ async function reply(o: Record<string, string>): Promise<void> {
   process.chdir(work);
   const dir = path.join(o.out, "reply");
   const request = { repo: `${owner}/${repo}`, pr, diffLines, hasShell: home !== undefined, extraInstructions: o["extra-instructions"] || undefined };
-  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000, home, transcript: keepsTranscripts(o) });
+  const sessionDir = o["session-dir"] || undefined;
+  if (sessionDir) await loadSession(o.service, { pr, comment, shadow: o.shadow !== "false" }, sessionDir);
+  await run({ role: "reply", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs: Number(o["timeout-seconds"]) * 1000, sessionDir, home, transcript: keepsTranscripts(o) });
   const s = submitted(dir) as ReplySubmission | undefined;
   let body = s ? s.body : `I could not answer this: ${failed(dir)}.`;
   if (scanSecrets(body, held())) body = "My answer carried a credential, so I withheld it.";
