@@ -54,7 +54,7 @@ export function metrics() {
     turns: histogram("seidroid_model_turns", "Assistant turns per model run, by repository, role and model.", ["repo", "role", "model"], [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]),
     runSeconds: histogram("seidroid_model_run_duration_seconds", "Time per model run, by repository, role and model.", ["repo", "role", "model"], SECONDS),
     commands: counter("seidroid_shell_commands_total", "Shell commands model runs ran, by repository, role and result.", ["repo", "role", "result"]),
-    compared: counter("seidroid_comparisons_total", "Commits both v1 and v2 were asked to review, by repository and each one's verdict; v1 is missing when it never reviewed the commit.", ["repo", "v1", "v2"]),
+    compared: counter("seidroid_comparisons_total", "Reviews v2 published in shadow, each paired in order of completion with one of v1's on the same commit, by repository and each one's verdict; v1 is missing when no review of its was left to pair.", ["repo", "v1", "v2"]),
     comparedFindings: histogram("seidroid_compared_findings", "Findings per commit both v1 and v2 reviewed, by repository and reviewer.", ["repo", "reviewer"], COUNTS),
     comparedSeconds: histogram("seidroid_compared_duration_seconds", "Review job time per commit both v1 and v2 reviewed and timed, by repository and reviewer.", ["repo", "reviewer"], SECONDS),
     first: counter("seidroid_compared_first_total", "Which reviewer published first on a compared commit, by repository.", ["repo", "reviewer"]),

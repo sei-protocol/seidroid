@@ -23,6 +23,8 @@ export interface Target {
   aiReviewCheck: boolean;
   /** Approve a clean review; without it a clean review only comments. */
   approve: boolean;
+  /** The check run's external_id, if any. */
+  externalId?: string;
 }
 
 export type Outcome = { verdict: Verdict } | { failure: string };
@@ -310,6 +312,7 @@ async function check(gh: GitHub, base: string, t: Target, out: CheckOutput): Pro
       conclusion: out.conclusion,
       output: { title: out.title, summary: out.summary, text: out.text },
       details_url: t.runUrl,
+      ...(name === t.checkName && t.externalId && { external_id: t.externalId }),
     });
   await must(post(t.checkName), "post the check run");
   if (!t.aiReviewCheck) return;
@@ -318,16 +321,24 @@ async function check(gh: GitHub, base: string, t: Target, out: CheckOutput): Pro
 }
 
 interface CheckRun {
+  conclusion: string | null;
   completed_at: string | null;
   app: { slug: string } | null;
   output: { text: string | null };
 }
 
+/** Recorded is what this App's latest check run that records findings for a pull request holds: its findings and its conclusion. */
+export interface History {
+  threads: PriorThread[];
+  /** null when no check run records any. */
+  conclusion: string | null;
+}
+
 /**
- * recordedHistory reads back the findings of this App's latest check run named checkName that
- * records any for the pull request, on the newest of its commits that has one.
+ * recordedHistory reads back the findings and conclusion of this App's latest check run named checkName
+ * that records findings for the pull request, on the newest of its commits that has one.
  */
-export async function recordedHistory(gh: GitHub, base: string, pr: number, checkName: string, bot: string): Promise<PriorThread[]> {
+export async function recordedHistory(gh: GitHub, base: string, pr: number, checkName: string, bot: string): Promise<History> {
   const commits = await all<{ sha: string }>(gh, `${base}/pulls/${pr}/commits`, 3);
   for (const { sha } of commits.slice(-MAX_HISTORY_COMMITS).reverse()) {
     const res = await gh.rest<{ check_runs: CheckRun[] }>("GET", `${base}/commits/${sha}/check-runs?check_name=${encodeURIComponent(checkName)}&filter=all&per_page=100`);
@@ -337,10 +348,10 @@ export async function recordedHistory(gh: GitHub, base: string, pr: number, chec
       .sort((a, b) => b.completed_at!.localeCompare(a.completed_at!));
     for (const c of runs) {
       const threads = recordedThreads(c.output.text, pr);
-      if (threads) return threads;
+      if (threads) return { threads, conclusion: c.conclusion };
     }
   }
-  return [];
+  return { threads: [], conclusion: null };
 }
 
 /** clearNotices deletes this App's earlier no-verdict notices on the pull request. */

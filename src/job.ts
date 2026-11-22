@@ -47,6 +47,12 @@ export interface Gate {
 
 export type Allow = (pr: number, comment?: number) => Promise<{ actor: boolean; author: boolean }>;
 
+/** Standing is how seidroid's latest review on a pull request ended. */
+export type Standing = "changes_requested" | "reviewed";
+
+/** OwnReviews reads how seidroid's latest review on a pull request ended from its own check runs, or undefined when it has none. */
+export type OwnReviews = (pr: number) => Promise<Standing | undefined>;
+
 const PUSH_ACTIONS = ["opened", "reopened", "ready_for_review", "synchronize"];
 
 /** commands are a comment's lines, normalised for matching a command: whitespace collapsed, lower case, no leading @. */
@@ -92,9 +98,10 @@ function commentOf(ev: Event): { pr: number; body: string; id: number; bot: bool
  * guard decides whether this event earns a review. A push reviews a ready, same-repository pull request once,
  * again on later pushes only with re-review on push or to lift this App's change request; a team member or an
  * allowed bot asks for one by comment at any time. Any other comment from a team member that mentions the phrase
- * earns a reply, outside shadow.
+ * earns a reply, outside shadow. In shadow, v1 posts its reviews as the same App, so seidroid's own reviews are
+ * read from its check runs instead.
  */
-export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow): Promise<Gate> {
+export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow, ownReviews: OwnReviews): Promise<Gate> {
   const deny = (pr: number, reason: string): Gate => ({ run: false, reply: false, reason, pr, head: "", comment: 0, ask: "" });
   const admit = (reason: string): Gate => ({ run: true, reply: false, reason, pr, head: p.head.sha, comment: 0, ask: "" });
   const asked = commentOf(ev);
@@ -126,13 +133,27 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id, ask: asked.bot ? "" : besides(asked.body, o.phrase) };
   if (p.draft) return deny(pr, "the pull request is a draft");
   if (!(await allow(pr)).author) return deny(pr, `${p.user.login} is not on the team, so a team member must ask for this review`);
-  const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
-  const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
-  if (!ours.length) return admit("the pull request has no review yet");
+  const last = o.shadow ? await ownReviews(pr) : await lastReview(gh, base, pr);
+  if (!last) return admit("the pull request has no review yet");
   if (ev.payload.action !== "synchronize") return deny(pr, "the pull request was already reviewed");
   if (o.reReviewOnPush) return admit("a push re-reviews");
-  if (ours.at(-1)!.state === "CHANGES_REQUESTED") return admit("a push may lift the change request");
+  if (last === "changes_requested") return admit("a push may lift the change request");
   return deny(pr, "the pull request was already reviewed");
+}
+
+/** lastReview is how this App's latest review on the pull request ended, or undefined when it has none. */
+async function lastReview(gh: GitHub, base: string, pr: number): Promise<Standing | undefined> {
+  const reviews = await all<{ state: string; body: string; user: { type: string } }>(gh, `${base}/pulls/${pr}/reviews`);
+  const ours = reviews.filter((r) => r.user.type === "Bot" && (r.body ?? "").startsWith(MARKER.verdict));
+  if (!ours.length) return undefined;
+  return ours.at(-1)!.state === "CHANGES_REQUESTED" ? "changes_requested" : "reviewed";
+}
+
+/** standingOf reads how seidroid's latest review ended from the conclusion of its latest check run that records one, as /history answers it. */
+export function standingOf(history: { conclusion?: unknown }): Standing | undefined {
+  if (history.conclusion === undefined) throw new Error("the seidroid service does not report its latest review; it predates this workflow");
+  if (history.conclusion === null) return undefined;
+  return history.conclusion === "failure" ? "changes_requested" : "reviewed";
 }
 
 const THREADS = `query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
@@ -530,7 +551,7 @@ async function main(): Promise<void> {
   if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply|react [--option value ...]");
   const ev: Event = { name: process.env.GITHUB_EVENT_NAME!, actor: process.env.GITHUB_ACTOR!, payload: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8")) };
   const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]), shadow: o.shadow !== "false" };
-  const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }));
+  const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }), async (pr) => standingOf(await service(o.service, "/history", { pr })));
   console.log(gate.reason);
   const eof = randomUUID();
   appendFileSync(process.env.GITHUB_OUTPUT!, `run=${gate.run}\nreply=${gate.reply}\npr=${gate.pr}\nhead=${gate.head}\ncomment=${gate.comment}\nask<<${eof}\n${gate.ask}\n${eof}\n`);

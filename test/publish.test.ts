@@ -177,6 +177,10 @@ test("publish copies the check run as AI Review when asked, and survives the cop
   await publish(copied.gh, { ...T, aiReviewCheck: true }, { failure: "pi exited with 1" });
   assert.deepEqual(names(copied.of), ["Seidroid Review: success", "AI Review: success", "Seidroid Review: failure", "AI Review: failure"]);
 
+  const compared = fake({});
+  await publish(compared.gh, { ...T, aiReviewCheck: true, externalId: "compare:pending:90" }, { verdict: verdict({}) });
+  assert.deepEqual(compared.of("POST /repos/o/r/check-runs").map((c) => c.external_id), ["compare:pending:90", undefined]);
+
   const refused = fake({ "POST /repos/o/r/check-runs": (b) => ({ status: b.name === "AI Review" ? 403 : 201, data: {} }) });
   assert.equal((await publish(refused.gh, { ...T, aiReviewCheck: true }, { verdict: verdict({}) })).conclusion, "success");
 });
