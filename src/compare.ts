@@ -146,13 +146,20 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     const claimed = new Set(v2.map((c) => /^compare:v1:(\d+)$/.exec(c.external_id!)?.[1]).filter(Boolean).map(Number));
     const v1 = (await runs(cfg.check, slug, "completed_at")).filter((c) => c.status === "completed" && c.completed_at && !claimed.has(c.id));
     const jobs = v1.length ? await runs(cfg.job, "github-actions", "started_at") : [];
+    const open = new Set(due);
+    const apart = (a: CheckRun, b: CheckRun) => Math.abs(Date.parse(a.completed_at!) - Date.parse(b.completed_at!));
+    let left = false;
     for (const run of due) {
-      const at = Date.parse(run.completed_at!);
-      const late = now - at > cfg.waitMs;
-      // A v1 review further than the wait from this one belongs to another attempt, or to one v2 never published.
-      const i = v1.findIndex((c) => Math.abs(Date.parse(c.completed_at!) - at) <= cfg.waitMs);
+      const late = now - Date.parse(run.completed_at!) > cfg.waitMs;
+      // A v1 review further than the wait belongs to another attempt, or to one v2 never published, and one nearer
+      // another v2 review still waiting belongs to that one.
+      const i = v1.findIndex((c) => apart(c, run) <= cfg.waitMs && ![...open].some((o) => o !== run && apart(c, o) < apart(c, run)));
       if (i < 0) {
-        if (!late) return false;
+        if (!late) {
+          left = true;
+          continue;
+        }
+        open.delete(run);
         await settle(gh, owner, repo, run, `${COMPARE}missing`);
         record(owner, repo, run);
         continue;
@@ -162,11 +169,12 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
       const job = jobs.filter((j) => j.started_at && j.started_at <= theirs.completed_at!).at(-1);
       if (job && job.status !== "completed" && !late) return false;
       v1.splice(i, 1);
+      open.delete(run);
       await settle(gh, owner, repo, run, `${COMPARE}v1:${theirs.id}`);
       const took = job?.started_at && job.completed_at ? (Date.parse(job.completed_at) - Date.parse(job.started_at)) / 1000 : undefined;
       record(owner, repo, run, theirs, took);
     }
-    return true;
+    return !left;
   }
 
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {

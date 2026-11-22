@@ -150,6 +150,20 @@ test("comparer leaves a v1 review further than the wait from a v2 review unpaire
   assert.equal(runs[1]!.external_id, "compare:v1:10");
 });
 
+test("comparer pairs a v1 review with the nearest v2 review, so one v1 never published for does not take the next one's", async () => {
+  const m = metrics();
+  const runs = [v2(1, "h", 10, "compare:pending"), v2(2, "h", 500, "compare:pending"), v1(9, "h", 501)];
+  const { gh } = checks(runs);
+  const c = comparer(m, cfg, { github: async () => gh, bot: async () => "seidroid[bot]" });
+  c.add("o", "r", "h");
+  await c.tick(600_000);
+  assert.deepEqual([runs[0]!.external_id, runs[1]!.external_id], ["compare:pending", "compare:v1:9"]);
+  assert.equal(c.waiting, 1);
+  await c.tick(1_020_000);
+  assert.equal(runs[0]!.external_id, "compare:missing");
+  assert.equal(c.waiting, 0);
+});
+
 test("comparer resumes after a restart from the recently updated pull requests of every repository, counting only reviews still pending", async () => {
   const m = metrics();
   const runs = [v2(1, "h", 1, "compare:pending"), v2(2, "g", 1, "compare:v1:9"), v1(9, "g", 1), v1(10, "h", 2), v2(3, "f", 1, "compare:pending"), v1(11, "f", 2), v2(4, "e", 1, "compare:pending"), v1(12, "e", 2)];
