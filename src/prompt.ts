@@ -101,7 +101,7 @@ function reconcileStep(req: Request): string[] {
       ),
     ];
   });
-  return block("reconcile", { readings: readings.join("\n") });
+  return block("reconcile", { readings: readings.join("\n"), tree: TREE });
 }
 
 function contractRules(req: Request): string[] {

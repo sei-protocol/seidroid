@@ -77,6 +77,13 @@ test("followUpPrompt carries the open threads and asks for one submission", () =
   assert.match(p, /calling submit_review once/);
 });
 
+test("a cross-check's blocker is confirmed in the callee and a documented-safe panic blocks", () => {
+  const p = reviewPrompt(req({ scouts: [{ name: "the cross-check", note: "", read: 9, inert: false, findings: [] }] })).replace(/\s+/g, " ");
+  for (const want of ["open in tree/ the definition of every function its argument depends on", "it is at most a suggestion that says what you could not check", "documentation says the call is safe (twice, concurrently, after a failure) breaks a stated contract"]) {
+    assert.ok(p.includes(want), want);
+  }
+});
+
 test("replyPrompt offers the shell only when the reply has one", () => {
   const r = { repo: "sei-protocol/sei-chain", pr: 7, diffLines: 3 };
   assert.doesNotMatch(replyPrompt(r), /You also have bash/);
