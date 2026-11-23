@@ -101,7 +101,8 @@ function reconcileStep(req: Request): string[] {
       ),
     ];
   });
-  return block("reconcile", { readings: readings.join("\n"), tree: TREE });
+  const callees = req.hasTree ? `\n\n${prose("reconcile-tree", { tree: TREE })}` : "";
+  return block("reconcile", { readings: readings.join("\n"), callees });
 }
 
 function contractRules(req: Request): string[] {
