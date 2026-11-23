@@ -145,11 +145,16 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   /** admits says whether login may ask for a review: an allowed bot or an active member of the team. */
   const admits = async (gh: GitHub, login: string): Promise<boolean> => cfg.bots.includes(login) || (await member(gh, login));
 
+  /** mergeParents is the parents of the merge a pull_request run runs on: its base, then the pull request's head it was started for. */
+  const mergeParents = async (gh: GitHub, claims: Claims): Promise<string[]> => {
+    const merge = SHA.test(claims.sha) ? await gh.rest<{ parents?: { sha: string }[] }>("GET", `/repos/${claims.repository}/commits/${claims.sha}`) : undefined;
+    return merge?.status === 200 ? (merge.data.parents ?? []).map((p) => p.sha) : [];
+  };
+
   /** callerOnBase says whether a pull_request run's calling workflow is the same file as on the base of the merge it runs on. */
   const callerOnBase = async (gh: GitHub, claims: Claims, caller: string): Promise<boolean> => {
     const base = `/repos/${claims.repository}`;
-    const merge = SHA.test(claims.sha) ? await gh.rest<{ parents?: { sha: string }[] }>("GET", `${base}/commits/${claims.sha}`) : undefined;
-    const parent = merge?.status === 200 ? merge.data.parents?.[0]?.sha : undefined;
+    const [parent] = await mergeParents(gh, claims);
     if (!parent) return false;
     const blob = async (ref: string) => {
       const r = await gh.rest<{ sha?: string }>("GET", `${base}/contents/${caller.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`);
@@ -159,7 +164,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return ran !== undefined && ran === onBase;
   };
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and on a team member's pull request, and a request only from the team or an allowed bot. */
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and on a team member's pull request, and any run only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`, "fork");
     if (claims.event_name === "pull_request") {
@@ -168,8 +173,8 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
         throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`, "workflow_changed");
       }
-      if (!(await admits(gh, pull.user.login))) {
-        throw new HttpError(403, `${pull.user.login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
+      for (const login of new Set([pull.user.login, claims.actor])) {
+        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
       }
     } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`, "team");
@@ -317,7 +322,9 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const runUrl = `https://github.com/${claims.repository}/actions/runs/${claims.run_id}/attempts/${claims.run_attempt}`;
       const shadow = body.shadow !== false;
       const compared = cmp && shadow;
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve: body.approve === true, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
+      // A push run approves only the head it was started for, which a re-run or a later push may have moved past.
+      const approve = body.approve === true && (claims.event_name !== "pull_request" || (await mergeParents(gh, claims))[1] === body.head);
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
       const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
