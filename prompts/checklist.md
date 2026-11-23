@@ -26,6 +26,8 @@ Do not drop it, and do not force it onto a line you guessed at.
 Before you call anything blocking, check it against the diff again: is the
 problem present in the changed code, or inferred from it? Blocking means it
 breaks correctness, breaks a stated contract, or is a real security risk.
-Anything else is non-blocking.
+A panic or data race reachable through an exported API whose documentation
+says the call is safe (twice, concurrently, after a failure) breaks a stated
+contract. Anything else is non-blocking.
 
 Skip style, formatting and naming entirely. Do not restate the diff.
