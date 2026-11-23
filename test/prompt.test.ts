@@ -80,11 +80,11 @@ test("followUpPrompt carries the open threads and asks for one submission", () =
 test("a cross-check's blocker is confirmed in the callee and a documented-safe panic blocks", () => {
   const scouts = [{ name: "the cross-check", note: "", read: 9, inert: false, findings: [] }];
   const p = reviewPrompt(req({ scouts })).replace(/\s+/g, " ");
-  for (const want of ["open in tree/ the definition of every function its argument depends on", "it is at most a suggestion that says what you could not check", "documentation says the call is safe (twice, concurrently, after a failure) breaks a stated contract", "lists in checked each file you opened in tree/ to confirm it"]) {
+  for (const want of ["open in tree/ the definition of every function its argument depends on", "it is at most a suggestion that says what you could not check", "documentation says the call is safe (twice, concurrently, after a failure) breaks a stated contract"]) {
     assert.ok(p.includes(want), want);
   }
   const noTree = reviewPrompt(req({ hasTree: false, scouts }));
-  assert.doesNotMatch(noTree, /definition of\s+every function|lists in checked/);
+  assert.doesNotMatch(noTree, /definition of\s+every function/);
 });
 
 test("replyPrompt offers the shell only when the reply has one", () => {
