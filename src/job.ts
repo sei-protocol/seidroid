@@ -8,15 +8,16 @@ import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { all, client, type GitHub } from "./github.ts";
 import type { PriorThread } from "./history.ts";
-import { DIFF, INTENT, SINCE, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
+import { DIFF, INTENT, pointsSomewhereReal, SINCE, STANDARDS, TREE, type Request, type ScoutReading } from "./prompt.ts";
 import { MARKER } from "./render.ts";
-import { hasSession, run, sha256 } from "./run.ts";
+import { hasSession, run, sha256, type Stats } from "./run.ts";
 import { bwrapArgs, canSandbox } from "./sandbox.ts";
 import { QUESTION, type ReplySubmission } from "./reply.ts";
 import { carriesOn, crossCheck, crossChecks, readingOf, ScoutSubmission, settleByScouts, type ScoutRequest } from "./scout.ts";
 import { scanSecrets } from "./secrets.ts";
 import { MAX_SESSION, pack, unpack } from "./session.ts";
 import { clip, guidelinesPath } from "./text.ts";
+import { parseSubmission, type ReviewSubmission } from "./verdict.ts";
 
 /** Event is the part of a workflow run's trigger the guard reads. */
 export interface Event {
@@ -427,12 +428,63 @@ const lines = (s: string): string[] => s.split(/[\s,]+/).filter((x) => x !== "")
 const submitted = (dir: string): unknown => (existsSync(path.join(dir, "submission.json")) ? JSON.parse(readFileSync(path.join(dir, "submission.json"), "utf8")) : undefined);
 const failed = (dir: string): string => JSON.parse(readFileSync(path.join(dir, "run.json"), "utf8")).error || "it did not submit";
 
+type Ran = Pick<Stats, "commands" | "reads">;
+
+const ranIn = (dir: string): Ran => {
+  const file = path.join(dir, "run.json");
+  const { commands = [], reads = [] } = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  return { commands, reads };
+};
+
+const CROSS_CHECK = /\bcross-checks?\b/i;
+const UNCONFIRMED = "Posted as a suggestion: this review did not open the code it depends on to confirm it.";
+
+/** opened reports whether a shell command or read the review made names file, as a whole path or one ending on a path segment. */
+function opened(file: string, ran: Ran): boolean {
+  const named = (t: string): boolean => {
+    const p = t.replace(/^(\.\/)+/, "");
+    return p !== "" && (p === file || p.endsWith(`/${file}`) || file.endsWith(`/${p}`));
+  };
+  return ran.commands.some((c) => c.command.split(/[\s'"`;|&()<>=,:]+/).some(named)) || ran.reads.some((r) => named(r.path));
+}
+
+/**
+ * confirmCrossChecks posts a blocker the review kept from a cross-check, which names the cross-check, as a
+ * suggestion unless it lists in checked only files that exist in tree and that the review opened. Blockers the
+ * review found itself are left alone, and so is a review without a tree, which had nothing to open.
+ */
+export function confirmCrossChecks(s: ReviewSubmission, ran: Ran, tree: string | undefined): ReviewSubmission {
+  if (tree === undefined) return s;
+  const confirmed = (checked: string[] = []): boolean =>
+    checked.length > 0 &&
+    checked.every((f) => {
+      const p = f.replace(/^(\.\/)+/, "").replace(new RegExp(`^${TREE}/`), "");
+      return pointsSomewhereReal(p) && existsSync(path.join(tree, p)) && opened(p, ran);
+    });
+  const demote = (body: string): string => `${body}\n\n${UNCONFIRMED}`;
+  const inline = (s.inline_comments ?? []).map((c) =>
+    c.severity === "blocker" && CROSS_CHECK.test(c.body) && !confirmed(c.checked) ? { ...c, severity: "suggestion" as const, body: demote(c.body) } : c,
+  );
+  const kept = (s.blockers ?? []).filter((b) => !CROSS_CHECK.test(b));
+  const moved = (s.blockers ?? []).filter((b) => CROSS_CHECK.test(b)).map(demote);
+  const demoted = moved.length + inline.filter((c, i) => c !== s.inline_comments![i]).length;
+  if (demoted === 0) return s;
+  const blocks = kept.length > 0 || inline.some((c) => c.severity === "blocker");
+  return {
+    ...s,
+    decision: s.decision === "request_changes" && !blocks ? "comment" : s.decision,
+    ...(s.inline_comments && { inline_comments: inline }),
+    ...(s.blockers && { blockers: kept }),
+    ...(moved.length > 0 && { non_blockers: [...(s.non_blockers ?? []), ...moved] }),
+  };
+}
+
 /** runsIn reports the model runs under out for the service's metrics: their run.json, with the commands counted rather than listed. */
 export function runsIn(out: string): object[] {
   return readdirSync(out, { withFileTypes: true }).flatMap((d) => {
     const file = path.join(out, d.name, "run.json");
     if (!d.isDirectory() || !existsSync(file)) return [];
-    const { commands = [], ...r } = JSON.parse(readFileSync(file, "utf8"));
+    const { commands = [], reads: _, ...r } = JSON.parse(readFileSync(file, "utf8"));
     return [{ ...r, commands: commands.length, failedCommands: commands.filter((c: { failed?: boolean }) => c.failed).length }];
   });
 }
@@ -563,7 +615,9 @@ async function review(o: Record<string, string>): Promise<void> {
       const dir = path.join(o.out, "review");
       await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
       const s = submitted(dir);
-      outcome = s ? { submission: s } : { failure: `the review did not finish: ${failed(dir)}` };
+      const parsed = s ? parseSubmission(s) : undefined;
+      const tree = request.hasTree ? path.join(work, TREE) : undefined;
+      outcome = s ? { submission: parsed?.ok ? confirmCrossChecks(parsed.submission, ranIn(dir), tree) : s } : { failure: `the review did not finish: ${failed(dir)}` };
     }
     if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
   } finally {
