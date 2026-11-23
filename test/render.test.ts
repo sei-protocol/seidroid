@@ -80,10 +80,10 @@ test("fit cuts a body within the byte limit", () => {
 
 test("summaryComment and findingComment carry their markers", () => {
   const settled = verdictOf({ read: 3, decision: "approve", summary: "Docs only." }, [], "");
-  settled.settledBy = "codex";
+  settled.settledBy = "the cross-check";
   const s = summaryComment(settled, false, "https://run");
   assert.ok(s.startsWith(MARKER.verdict + "\n"));
-  assert.match(s, /settled by codex with no review turn · \[run\]\(https:\/\/run\)/);
+  assert.match(s, /settled by the cross-check with no review turn · \[run\]\(https:\/\/run\)/);
   const f = { file: "a.go", line: 3, side: "RIGHT" as const, severity: "blocker" as const, detail: "panics", supersedes: [] };
   assert.equal(findingComment(f), `${MARKER.finding}\n**blocker** — panics`);
   assert.match(findingComment(f, true), /Cited at `a.go:3`, outside this diff's changed lines/);

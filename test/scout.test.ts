@@ -1,20 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { carriesOn, readingOf, scoutPrompt, settleByScouts } from "../src/scout.ts";
+import { carriesOn, crossCheck, crossChecks, readingOf, scoutPrompt, settleByScouts } from "../src/scout.ts";
 
 const inert = { read: 4, inert: true, findings: [] };
 
-test("readingOf turns a missing or unread submission into a note", () => {
-  assert.equal(readingOf("codex", "timed out").note, "timed out");
+test("readingOf turns a missing or unread submission into a note that names no model", () => {
+  assert.equal(readingOf("the cross-check", "no model credential: openai/gpt-x").note, "it did not finish its reading");
   assert.equal(readingOf("codex", { ...inert, read: 0 }).note, "it could not read the diff");
   assert.deepEqual(readingOf("codex", inert), { name: "codex", note: "", ...inert });
 });
 
+test("crossCheck labels one scout alone and several by position", () => {
+  assert.equal(crossCheck(0, 1), "the cross-check");
+  assert.deepEqual([0, 1, 2].map((i) => crossCheck(i, 3)), ["cross-check A", "cross-check B", "cross-check C"]);
+  assert.equal(crossCheck(26, 27), "cross-check 27");
+  assert.deepEqual([1, 2, 3].map(crossChecks), ["the cross-check", "both cross-checks", "all 3 cross-checks"]);
+});
+
 test("settleByScouts approves only when every scout read an inert, clean diff", () => {
-  const settled = settleByScouts([readingOf("a", inert), readingOf("b", { ...inert, read: 9 })], 4);
+  const settled = settleByScouts([readingOf("cross-check A", inert), readingOf("cross-check B", { ...inert, read: 9 })], 4);
   assert.equal(settled?.decision, "approve");
   assert.equal(settled?.read, 4);
-  assert.match(settled!.summary, /\(a, b\)/);
+  assert.match(settled!.summary, /^Settled by both cross-checks without a review turn: /);
+  assert.match(settleByScouts([readingOf("openai/gpt-x", inert)], 4)!.summary, /^Settled by the cross-check without a review turn: /);
+  assert.doesNotMatch(settleByScouts([readingOf("openai/gpt-x", inert)], 4)!.summary, /gpt|openai/);
   for (const other of [
     readingOf("b", "failed"),
     readingOf("b", { ...inert, inert: false }),
