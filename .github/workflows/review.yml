@@ -17,8 +17,7 @@ jobs:
           - { id: '4902', pr: 4902, head: '2a5b385efd43861d51ca2c0ab4055b82c54bfc51' }
           - { id: '4877', pr: 4877, head: '4d007df1d9e0d782850fc9466c0bbe9cee11a5a3' }
         arm:
-          - { id: A, ref: 377ffc6260cfb36f19e8e654ff5e1ca0f34ce7d3 }
-          - { id: B, ref: ffc09396c3cc51761a1c2a2de350811f976dabd6 }
+          - { id: C, ref: da6f296b501c2baeb9dfff828851ba3df9ddbd14 }
         rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
       max-parallel: 20
     env:

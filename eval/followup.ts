@@ -49,7 +49,7 @@ const sub = existsSync(path.join(out, "review", "submission.json")) ? JSON.parse
 const raw = sub ? parseSubmission(sub) : undefined;
 // The checked-callee rule, where this revision has it, runs on the submission as the job would publish it.
 const confirm = (job as any).confirmCrossChecks;
-const parsed = raw?.ok && typeof confirm === "function" ? { ok: true as const, submission: confirm(raw.submission, runOf(path.join(out, "review"))) } : raw;
+const parsed = raw?.ok && typeof confirm === "function" ? { ok: true as const, submission: confirm(raw.submission, runOf(path.join(out, "review")) ?? { commands: [], reads: [] }, tree) } : raw;
 const rawFindings = raw?.ok ? reportedFindings(verdictOf(raw.submission)) : [];
 const findings = parsed?.ok ? reportedFindings(verdictOf(parsed.submission)) : [];
 if (parsed?.ok) writeFileSync(path.join(work, "threads.json"), JSON.stringify(recordedThreads(recordFindings(pr, findings), pr) ?? []));
