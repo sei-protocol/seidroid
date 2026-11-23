@@ -224,7 +224,7 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
-test("publish takes a pull_request run only on a team member's pull request, whoever triggered it", async () => {
+test("publish takes a pull_request run only on a team member's pull request, triggered by the team or an allowed bot", async () => {
   const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
   try {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
@@ -236,10 +236,35 @@ test("publish takes a pull_request run only on a team member's pull request, who
   }
   const t = await serve(base);
   try {
-    const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ actor: "devin-ai-integration[bot]" }));
-    assert.equal(r.status, 200, JSON.stringify(r.body));
+    for (const actor of ["alice", "dependabot[bot]"]) {
+      const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ actor }));
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+    }
+    for (const actor of ["mallory", "devin-ai-integration[bot]"]) {
+      const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, claims({ actor }));
+      assert.equal(r.status, 403);
+      assert.ok(r.body.error.startsWith(`${actor} is not an active member`), r.body.error);
+    }
+    assert.equal(t.published.length, 2);
+    assert.match(await t.metrics(), /seidroid_refusals_total\{route="POST \/publish",reason="team"\} 2/);
   } finally {
     t.close();
+  }
+});
+
+test("publish approves for a pull_request run only the head it was started for", async () => {
+  const later = "e".repeat(40);
+  const s = await serve({
+    ...base,
+    [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: later, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
+    [`GET ${repo}/compare/${HEAD}...${later}`]: ok({ status: "ahead" }),
+  });
+  try {
+    for (const head of [HEAD, later]) assert.equal((await s.call("/publish", { pr: 7, head, outcome: { submission }, approve: true })).status, 200);
+    await s.call("/publish", { pr: 7, head: later, outcome: { submission }, approve: true }, claims({ event_name: "issue_comment", ref: "refs/heads/main" }));
+    assert.deepEqual(s.published.map((p) => [p.target.head, p.target.approve]), [[HEAD, true], [later, false], [later, true]]);
+  } finally {
+    s.close();
   }
 });
 
@@ -454,6 +479,7 @@ test("session keeps one session per admitted run's repository, pull request and 
       ["PUT", "pr=7&shadow=false", claims(), 413, /too large/, new Uint8Array(MAX_SESSION + 1)],
       ["PUT", "pr=7&shadow=false", claims(), 400, /corrupt header|Unknown frame/, new Uint8Array(100)],
       ["PUT", "pr=7&comment=6&shadow=false", comment(), 403, /not alice's/, packed],
+      ["PUT", "pr=7&shadow=false", claims({ actor: "mallory" }), 403, /mallory is not an active member/, packed],
     ];
     for (const [method, query, c, status, err, body] of cases) {
       const r = await s.session(method, query, c, body);
