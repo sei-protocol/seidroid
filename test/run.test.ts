@@ -20,13 +20,10 @@ test("tally sums usage over finished assistant messages", () => {
   tally(s, JSON.stringify({ type: "tool_execution_start", toolCallId: "d", toolName: "bash", args: {} }));
   tally(s, JSON.stringify({ type: "tool_execution_end", toolCallId: "d", toolName: "bash", isError: true }));
   tally(s, JSON.stringify({ type: "tool_execution_start", toolCallId: "c", toolName: "bash", args: { command: "ls" } }));
-  tally(s, JSON.stringify({ type: "tool_execution_start", toolCallId: "e", toolName: "read", args: { path: "../x" } }));
-  tally(s, JSON.stringify({ type: "tool_execution_end", toolCallId: "e", toolName: "read", isError: true }));
   tally(s, "not json");
   assert.deepEqual(s, {
     turns: 2, input: 20, output: 4, cacheRead: 10, cacheWrite: 2, cost: 1, error: "529",
     commands: [{ id: "a", command: "go test ./...", failed: true }, { id: "c", command: "ls" }],
-    reads: [{ id: "b", path: "pr.diff" }],
   });
 });
 

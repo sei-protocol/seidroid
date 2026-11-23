@@ -33,11 +33,9 @@ export interface Stats {
   error: string;
   /** commands are the shell commands the model ran, in order, with whether each failed. */
   commands: { id: string; command: string; failed?: boolean }[];
-  /** reads are the paths the model opened with the read tool, in order. */
-  reads: { id: string; path: string }[];
 }
 
-export const emptyStats = (): Stats => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, error: "", commands: [], reads: [] });
+export const emptyStats = (): Stats => ({ turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, error: "", commands: [] });
 
 const MAX_COMMANDS = 200;
 const MAX_COMMAND_CHARS = 1000;
@@ -48,7 +46,7 @@ export function tally(stats: Stats, record: string): void {
     type?: string;
     toolCallId?: string;
     toolName?: string;
-    args?: { command?: unknown; path?: unknown };
+    args?: { command?: unknown };
     isError?: boolean;
     durationMs?: number;
     message?: { role?: string; usage?: Partial<Record<"input" | "output" | "cacheRead" | "cacheWrite", number>> & { cost?: { total?: number } }; stopReason?: string; errorMessage?: string };
@@ -66,13 +64,6 @@ export function tally(stats: Stats, record: string): void {
     // pi reports no duration for a call it refused before running it.
     if (i >= 0 && event.durationMs === undefined) stats.commands.splice(i, 1);
     else if (i >= 0) stats.commands[i]!.failed = event.isError === true;
-  }
-  if (event.toolName === "read" && event.type === "tool_execution_start" && stats.reads.length < MAX_COMMANDS) {
-    stats.reads.push({ id: String(event.toolCallId), path: String(event.args?.path ?? "").slice(0, MAX_COMMAND_CHARS) });
-  }
-  if (event.toolName === "read" && event.type === "tool_execution_end" && event.isError === true) {
-    const i = stats.reads.findIndex((r) => r.id === String(event.toolCallId));
-    if (i >= 0) stats.reads.splice(i, 1);
   }
   const m = event.message;
   if (event.type !== "message_end" || m?.role !== "assistant") return;
