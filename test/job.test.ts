@@ -426,7 +426,7 @@ test("confirmCrossChecks keeps a cross-check's blocker only when it names files 
   mkdirSync(path.join(tree, "db/mvcc"), { recursive: true });
   for (const f of ["db/mvcc/key.go", "db/mvcc/scan.go", "db/mvcc/merge.go"]) writeFileSync(path.join(tree, f), "package mvcc\n");
   const ran = {
-    commands: [{ id: "1", command: "sed -n '1,80p' tree/db/mvcc/key.go" }, { id: "2", command: "cd tree/db/mvcc && grep -n Next scan.go", failed: true }],
+    commands: [{ id: "1", command: "sed -n '1,80p' tree/db/mvcc/key.go" }, { id: "2", command: "cd tree/db/mvcc && grep -n Next scan.go", failed: true }, { id: "4", command: "grep -rn Split tree/db/mvcc" }],
     reads: [{ id: "3", path: "/w/tree/db/mvcc/merge.go" }],
   };
   const blocker = (body: string, checked?: string[]) => ({ path: "db/mvcc/store.go", line: 9, severity: "blocker" as const, body, ...(checked && { checked }) });
@@ -438,17 +438,18 @@ test("confirmCrossChecks keeps a cross-check's blocker only when it names files 
       blocker("The cross-check says this leaks."),
       blocker("Cross-check B: the iterator outlives the batch.", ["db/mvcc/key.go", "db/mvcc/batch.go"]),
       blocker("The cross-check says this races.", ["db/mvcc/merge.go/../key.go"]),
+      blocker("The cross-check says this copies.", ["db/mvcc"]),
       blocker("Drops the error."),
     ],
     blockers: ["Both cross-checks: no migration.", "Breaks the wire format."],
   };
   const got = confirmCrossChecks(s, ran, tree);
-  assert.deepEqual(got.inline_comments!.map((c) => c.severity), ["blocker", "blocker", "suggestion", "suggestion", "suggestion", "blocker"]);
+  assert.deepEqual(got.inline_comments!.map((c) => c.severity), ["blocker", "blocker", "suggestion", "suggestion", "suggestion", "suggestion", "blocker"]);
   assert.match(got.inline_comments![2]!.body, /^The cross-check says this leaks\.\n\nPosted as a suggestion: /);
   assert.deepEqual(got.blockers, ["Breaks the wire format."]);
   assert.deepEqual(got.non_blockers!.map((b) => b.split("\n\n")[0]), ["Both cross-checks: no migration."]);
   assert.equal(got.decision, "request_changes");
-  const own = { ...s, inline_comments: [s.inline_comments[5]!], blockers: ["Breaks the wire format."] };
+  const own = { ...s, inline_comments: [s.inline_comments[6]!], blockers: ["Breaks the wire format."] };
   assert.equal(confirmCrossChecks(own, ran, tree), own);
   assert.equal(confirmCrossChecks(s, ran, undefined), s);
   assert.equal(confirmCrossChecks({ ...s, inline_comments: [s.inline_comments[2]!], blockers: [] }, ran, tree).decision, "comment");

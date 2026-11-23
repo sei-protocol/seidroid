@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -450,7 +450,7 @@ function opened(file: string, ran: Ran): boolean {
 
 /**
  * confirmCrossChecks posts a blocker the review kept from a cross-check, which names the cross-check, as a
- * suggestion unless it lists in checked only files that exist in tree and that the review opened. Blockers the
+ * suggestion unless it lists in checked only files, not directories, in tree that the review opened. Blockers the
  * review found itself are left alone, and so is a review without a tree, which had nothing to open.
  */
 export function confirmCrossChecks(s: ReviewSubmission, ran: Ran, tree: string | undefined): ReviewSubmission {
@@ -459,7 +459,7 @@ export function confirmCrossChecks(s: ReviewSubmission, ran: Ran, tree: string |
     checked.length > 0 &&
     checked.every((f) => {
       const p = f.replace(/^(\.\/)+/, "").replace(new RegExp(`^${TREE}/`), "");
-      return pointsSomewhereReal(p) && existsSync(path.join(tree, p)) && opened(p, ran);
+      return pointsSomewhereReal(p) && statSync(path.join(tree, p), { throwIfNoEntry: false })?.isFile() === true && opened(p, ran);
     });
   const demote = (body: string): string => `${body}\n\n${UNCONFIRMED}`;
   const inline = (s.inline_comments ?? []).map((c) =>
