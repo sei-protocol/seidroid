@@ -448,18 +448,33 @@ function opened(file: string, ran: Ran): boolean {
   return ran.commands.some((c) => c.command.split(/[\s'"`;|&()<>=,:]+/).some(named)) || ran.reads.some((r) => named(r.path));
 }
 
+/** addedIn lists the files a diff adds, whose whole text it holds. */
+export function addedIn(diff: string): Set<string> {
+  const added = new Set<string>();
+  let file = "";
+  for (const l of diff.split("\n")) {
+    if (l.startsWith("diff --git ")) file = l.slice(l.lastIndexOf(" b/") + 3);
+    else if (l.startsWith("new file mode ")) added.add(file);
+  }
+  return added;
+}
+
 /**
  * confirmCrossChecks posts a blocker the review kept from a cross-check, which names the cross-check, as a
- * suggestion unless it lists in checked only files, not directories, in tree that the review opened. Blockers the
- * review found itself are left alone, and so is a review without a tree, which had nothing to open.
+ * suggestion unless it lists in checked only files, not directories, in the tree under work that the review opened,
+ * or read in the diff when the diff adds them. Blockers the review found itself are left alone, and so is a review
+ * without a tree, which had nothing to open.
  */
-export function confirmCrossChecks(s: ReviewSubmission, ran: Ran, tree: string | undefined): ReviewSubmission {
-  if (tree === undefined) return s;
+export function confirmCrossChecks(s: ReviewSubmission, ran: Ran, work: string | undefined): ReviewSubmission {
+  if (work === undefined) return s;
+  const tree = path.join(work, TREE);
+  const diff = path.join(work, DIFF);
+  const added = addedIn(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   const confirmed = (checked: string[] = []): boolean =>
     checked.length > 0 &&
     checked.every((f) => {
       const p = f.replace(/^(\.\/)+/, "").replace(new RegExp(`^${TREE}/`), "");
-      return pointsSomewhereReal(p) && statSync(path.join(tree, p), { throwIfNoEntry: false })?.isFile() === true && opened(p, ran);
+      return pointsSomewhereReal(p) && statSync(path.join(tree, p), { throwIfNoEntry: false })?.isFile() === true && (opened(p, ran) || (added.has(p) && opened(DIFF, ran)));
     });
   const demote = (body: string): string => `${body}\n\n${UNCONFIRMED}`;
   const inline = (s.inline_comments ?? []).map((c) =>
@@ -616,8 +631,7 @@ async function review(o: Record<string, string>): Promise<void> {
       await run({ role: "review", request, outDir: dir, model: o["review-model"], thinking: o.thinking, timeoutMs, sessionDir, home, transcript });
       const s = submitted(dir);
       const parsed = s ? parseSubmission(s) : undefined;
-      const tree = request.hasTree ? path.join(work, TREE) : undefined;
-      outcome = s ? { submission: parsed?.ok ? confirmCrossChecks(parsed.submission, ranIn(dir), tree) : s } : { failure: `the review did not finish: ${failed(dir)}` };
+      outcome = s ? { submission: parsed?.ok ? confirmCrossChecks(parsed.submission, ranIn(dir), request.hasTree ? work : undefined) : s } : { failure: `the review did not finish: ${failed(dir)}` };
     }
     if (scanSecrets(JSON.stringify(outcome), held())) outcome = { failure: "the review's answer carried a credential, so it was withheld" };
   } finally {

@@ -422,12 +422,14 @@ test("loadSession restores the kept session, and starts cold without one unless 
 });
 
 test("confirmCrossChecks keeps a cross-check's blocker only when it names files the review opened in the tree", () => {
-  const tree = mkdtempSync(path.join(tmpdir(), "tree-"));
+  const work = mkdtempSync(path.join(tmpdir(), "work-"));
+  const tree = path.join(work, "tree");
   mkdirSync(path.join(tree, "db/mvcc"), { recursive: true });
-  for (const f of ["db/mvcc/key.go", "db/mvcc/scan.go", "db/mvcc/merge.go"]) writeFileSync(path.join(tree, f), "package mvcc\n");
+  for (const f of ["db/mvcc/key.go", "db/mvcc/scan.go", "db/mvcc/merge.go", "db/mvcc/new.go", "db/mvcc/old.go"]) writeFileSync(path.join(tree, f), "package mvcc\n");
+  writeFileSync(path.join(work, "pr.diff"), ["db/mvcc/new.go", "db/mvcc/old.go"].map((f) => `diff --git a/${f} b/${f}\n${f.endsWith("new.go") ? "new file mode 100644\n" : ""}`).join(""));
   const ran = {
     commands: [{ id: "1", command: "sed -n '1,80p' tree/db/mvcc/key.go" }, { id: "2", command: "cd tree/db/mvcc && grep -n Next scan.go", failed: true }, { id: "4", command: "grep -rn Split tree/db/mvcc" }],
-    reads: [{ id: "3", path: "/w/tree/db/mvcc/merge.go" }],
+    reads: [{ id: "3", path: "/w/tree/db/mvcc/merge.go" }, { id: "5", path: "pr.diff" }],
   };
   const blocker = (body: string, checked?: string[]) => ({ path: "db/mvcc/store.go", line: 9, severity: "blocker" as const, body, ...(checked && { checked }) });
   const s = {
@@ -439,18 +441,20 @@ test("confirmCrossChecks keeps a cross-check's blocker only when it names files 
       blocker("Cross-check B: the iterator outlives the batch.", ["db/mvcc/key.go", "db/mvcc/batch.go"]),
       blocker("The cross-check says this races.", ["db/mvcc/merge.go/../key.go"]),
       blocker("The cross-check says this copies.", ["db/mvcc"]),
+      blocker("The cross-check says the new store leaks.", ["db/mvcc/new.go"]),
+      blocker("The cross-check says the old store leaks.", ["db/mvcc/old.go"]),
       blocker("Drops the error."),
     ],
     blockers: ["Both cross-checks: no migration.", "Breaks the wire format."],
   };
-  const got = confirmCrossChecks(s, ran, tree);
-  assert.deepEqual(got.inline_comments!.map((c) => c.severity), ["blocker", "blocker", "suggestion", "suggestion", "suggestion", "suggestion", "blocker"]);
+  const got = confirmCrossChecks(s, ran, work);
+  assert.deepEqual(got.inline_comments!.map((c) => c.severity), ["blocker", "blocker", "suggestion", "suggestion", "suggestion", "suggestion", "blocker", "suggestion", "blocker"]);
   assert.match(got.inline_comments![2]!.body, /^The cross-check says this leaks\.\n\nPosted as a suggestion: /);
   assert.deepEqual(got.blockers, ["Breaks the wire format."]);
   assert.deepEqual(got.non_blockers!.map((b) => b.split("\n\n")[0]), ["Both cross-checks: no migration."]);
   assert.equal(got.decision, "request_changes");
-  const own = { ...s, inline_comments: [s.inline_comments[6]!], blockers: ["Breaks the wire format."] };
-  assert.equal(confirmCrossChecks(own, ran, tree), own);
+  const own = { ...s, inline_comments: [s.inline_comments[8]!], blockers: ["Breaks the wire format."] };
+  assert.equal(confirmCrossChecks(own, ran, work), own);
   assert.equal(confirmCrossChecks(s, ran, undefined), s);
-  assert.equal(confirmCrossChecks({ ...s, inline_comments: [s.inline_comments[2]!], blockers: [] }, ran, tree).decision, "comment");
+  assert.equal(confirmCrossChecks({ ...s, inline_comments: [s.inline_comments[2]!], blockers: [] }, ran, work).decision, "comment");
 });
