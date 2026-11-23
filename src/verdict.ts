@@ -14,6 +14,7 @@ export const InlineComment = Type.Object({
   severity: oneOf(["blocker", "suggestion", "nit"] as const),
   body: Type.String({ minLength: 1, description: "What is wrong and why it matters." }),
   supersedes_thread_ids: Ids("Ids of your earlier threads this comment restates."),
+  checked: Type.Optional(Type.Array(Type.String(), { description: "For a blocker kept from a cross-check: each file in the tree you opened to confirm it." })),
 });
 
 export const PreExistingIssue = Type.Object({
