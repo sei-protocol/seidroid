@@ -502,7 +502,7 @@ if (import.meta.main) {
     sessionPrefix: env("SEIDROID_SESSION_PREFIX", ""),
   };
   const v1Check = env("SEIDROID_COMPARE_CHECK", "review");
-  if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
+  if (v1Check) cfg.compare = { check: v1Check, job: env("SEIDROID_COMPARE_JOB", "seidroid-review / Review"), guard: env("SEIDROID_COMPARE_GUARD", "seidroid-review / Guard"), waitMs: Number(env("SEIDROID_COMPARE_WAIT_MINUTES", "180")) * 60_000 };
   const audience = env("SEIDROID_AUDIENCE");
   if (!URL.canParse(audience) || new URL(audience).origin !== audience) throw new Error(`SEIDROID_AUDIENCE must be the service's own origin, such as https://seidroid.example, not ${JSON.stringify(audience)}`);
   const serve = handler(cfg, { verify: (t) => verifyToken(t, audience, keys), github: (o, r) => app.forRepo(o, r), bot: () => app.bot(), repos: () => app.repos(cfg.owners), publish, schedule: (tick) => setInterval(() => void tick(), COMPARE_EVERY_MS), sessions: sessionStore(process.env) });

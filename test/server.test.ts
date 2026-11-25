@@ -158,7 +158,7 @@ test("publish records the review and the job's model runs in the metrics, and co
       [`GET ${checks}?check_name=Seidroid%20Review&filter=all&per_page=100`]: ok({ check_runs: [v2] }),
       [`PATCH ${repo}/check-runs/3`]: (b) => (settled.push(b), { status: 200, data: {} }),
     },
-    { ...cfg, compare: { check: "review", job: "seidroid-review / Review", waitMs: 60_000 } },
+    { ...cfg, compare: { check: "review", job: "seidroid-review / Review", guard: "seidroid-review / Guard", waitMs: 60_000 } },
   );
   try {
     const found = { ...submission, decision: "comment", non_blockers: ["tidy"], inline_comments: [{ path: "a.go", line: 3, side: "RIGHT", severity: "suggestion", body: "x" }, { path: "a.go", line: 4, side: "RIGHT", severity: "nit", body: "y" }] };
