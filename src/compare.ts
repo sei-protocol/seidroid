@@ -6,6 +6,8 @@ export interface CompareConfig {
   check: string;
   /** The check run of v1's review job, whose time it took is v1's. */
   job: string;
+  /** The check run of v1's guard job, whose notice says when v1 declined to review a commit again. */
+  guard: string;
   /** How long to wait for v1 before counting it missing. */
   waitMs: number;
 }
@@ -28,6 +30,9 @@ interface CheckRun {
   app: { slug: string } | null;
   output: { title: string | null };
 }
+
+/** The notice v1's guard leaves when a pull request already carries its verdict and a push does not earn another. */
+const NOT_REREVIEWED = /already carries a verdict from this workflow, and this \S+ event does not earn another/;
 
 const MAX_WAITING = 1000;
 const RESUMED_PULLS = 100;
@@ -174,6 +179,7 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     const v1 = theirs.filter((c) => !claimed.has(c.id) && Date.parse(c.completed_at!) > after);
     const jobs = v1.length ? await runs(cfg.job, "github-actions", "started_at") : [];
     const partners = align(due, v1, cfg.waitMs);
+    let absent: Promise<"missing" | "not_rereviewed"> | undefined;
     // Each review is settled in order of completion, so one still waiting for v1 holds back the later ones, whose
     // partners may yet change.
     for (const [k, run] of due.entries()) {
@@ -181,8 +187,11 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
       const partner = partners[k];
       if (!partner) {
         if (!late) return false;
-        await settle(gh, owner, repo, run, `${COMPARE}missing`);
-        record(owner, repo, run);
+        // v1 reviewing nothing on this commit because it already left a verdict on an earlier one is no miss of v1's.
+        absent ??= theirs.length ? Promise.resolve("missing") : declined(gh, owner, repo, head).then((d) => (d ? "not_rereviewed" : "missing"));
+        const v1 = await absent;
+        await settle(gh, owner, repo, run, `${COMPARE}${v1}`);
+        record(owner, repo, run, v1);
         continue;
       }
       // v1 publishes its verdict before its job ends, so the job's time waits for the job that published it.
@@ -195,18 +204,31 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     return true;
   }
 
+  /** declined reports whether a guard job of v1's on head said it would not review head because of an earlier verdict. */
+  async function declined(gh: GitHub, owner: string, repo: string, head: string): Promise<boolean> {
+    for (const guard of await checkRuns(gh, owner, repo, head, cfg.guard, "github-actions", "started_at")) {
+      const res = await gh.rest<{ annotation_level: string; message: string }[]>("GET", `/repos/${owner}/${repo}/check-runs/${guard.id}/annotations?per_page=100`);
+      if (res.status !== 200) throw new Error(`could not read the annotations of check run ${guard.id}: ${res.status}`);
+      if (res.data.some((a) => a.annotation_level === "notice" && NOT_REREVIEWED.test(a.message))) return true;
+    }
+    return false;
+  }
+
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {
     const res = await gh.rest("PATCH", `/repos/${owner}/${repo}/check-runs/${run.id}`, { external_id: externalId });
     if (res.status !== 200) throw new Error(`could not settle check run ${run.id}: ${res.status}`);
   }
 
-  function record(owner: string, repo: string, run: CheckRun, theirs?: CheckRun, v1Seconds?: number): void {
+  function record(owner: string, repo: string, run: CheckRun, theirs: CheckRun | "missing" | "not_rereviewed", v1Seconds?: number): void {
     const name = `${owner}/${repo}`;
     const v2 = verdicts({ conclusion: run.conclusion ?? "failure", title: run.output.title ?? "" });
     const v2Seconds = Number(/^compare:pending:(\d+(?:\.\d+)?)$/.exec(run.external_id!)?.[1] ?? NaN);
-    const v1 = theirs && verdicts({ conclusion: theirs.conclusion ?? "failure", title: theirs.output.title ?? "" });
-    m.compared.inc({ repo: name, v1: v1?.verdict ?? "missing", v2: v2.verdict });
-    if (!v1) return;
+    if (typeof theirs === "string") {
+      m.compared.inc({ repo: name, v1: theirs, v2: v2.verdict });
+      return;
+    }
+    const v1 = verdicts({ conclusion: theirs.conclusion ?? "failure", title: theirs.output.title ?? "" });
+    m.compared.inc({ repo: name, v1: v1.verdict, v2: v2.verdict });
     m.comparedFindings.observe({ repo: name, reviewer: "v1" }, v1.findings);
     m.comparedFindings.observe({ repo: name, reviewer: "v2" }, v2.findings);
     if (v1Seconds !== undefined && !Number.isNaN(v2Seconds)) {
