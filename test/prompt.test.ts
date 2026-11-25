@@ -87,6 +87,13 @@ test("a cross-check's blocker is confirmed in the callee and a documented-safe p
   assert.doesNotMatch(noTree, /definition of\s+every function/);
 });
 
+test("a blocker resting on an unverifiable environment fact is a suggestion", () => {
+  const p = reviewPrompt(req()).replace(/\s+/g, " ");
+  for (const want of ["what a CI runner image ships, whether a secret or variable is set", "Finding nothing in the repository that provides one does not show it is missing", "post it as a suggestion that names the fact to confirm"]) {
+    assert.ok(p.includes(want), want);
+  }
+});
+
 test("replyPrompt offers the shell only when the reply has one", () => {
   const r = { repo: "sei-protocol/sei-chain", pr: 7, diffLines: 3 };
   assert.doesNotMatch(replyPrompt(r), /You also have bash/);
