@@ -105,13 +105,13 @@ test("comparer tells v1 declining to review a commit again apart from v1 missing
   const m = metrics();
   const guard = (id: number, head: string, message: string): Run => ({ ...v1(id, head, 0, "success"), name: "g", app: { slug: "github-actions" }, annotations: [{ annotation_level: "warning", message: "Input 'app-id' has been deprecated" }, { annotation_level: "notice", message }] });
   const declined = "o/r#1 already carries a verdict from this workflow, and this synchronize event does not earn another; comment @seidroid review to ask for one";
-  const runs = [guard(20, "h", declined), v2(1, "h", 1, "compare:pending"), v2(2, "h", 2, "compare:pending"), guard(21, "g", "o/r#1 is a draft"), v2(3, "g", 1, "compare:pending"), guard(22, "f", declined), v1(9, "f", 1), v2(4, "f", 1, "compare:v1:9"), v2(5, "f", 2, "compare:pending")];
+  const runs = [guard(20, "h", declined), v2(1, "h", 1, "compare:pending"), v2(2, "h", 2, "compare:pending"), guard(21, "g", declined), { ...guard(23, "g", "o/r#1 asked for a review"), started_at: at(1) }, v2(3, "g", 1, "compare:pending"), guard(22, "f", declined), v1(9, "f", 1), v2(4, "f", 1, "compare:v1:9"), v2(5, "f", 2, "compare:pending")];
   const { gh, reads } = checks(runs);
   const c = comparer(m, { ...cfg, waitMs: 1000 }, { github: async () => gh, bot: async () => "seidroid[bot]" });
   for (const head of ["h", "g", "f"]) c.add("o", "r", head);
   await c.tick(5000);
   assert.deepEqual([1, 2, 3, 5].map((id) => runs.find((r) => r.id === id)!.external_id), ["compare:not_rereviewed", "compare:not_rereviewed", "compare:missing", "compare:missing"]);
-  assert.deepEqual(reads.filter((r) => r.includes("annotations")), ["GET /repos/o/r/check-runs/20/annotations?per_page=100", "GET /repos/o/r/check-runs/21/annotations?per_page=100"]);
+  assert.deepEqual(reads.filter((r) => r.includes("annotations")), [20, 21, 23].map((id) => `GET /repos/o/r/check-runs/${id}/annotations?per_page=100`));
   const text = await m.registry.metrics();
   assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="not_rereviewed",v2="pass"\} 2\n/);
   assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="missing",v2="pass"\} 2\n/);

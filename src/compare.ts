@@ -204,14 +204,16 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
     return true;
   }
 
-  /** declined reports whether a guard job of v1's on head said it would not review head because of an earlier verdict. */
+  /** declined reports whether every guard job of v1's on head said it would not review head because of an earlier verdict. */
   async function declined(gh: GitHub, owner: string, repo: string, head: string): Promise<boolean> {
-    for (const guard of await checkRuns(gh, owner, repo, head, cfg.guard, "github-actions", "started_at")) {
+    const guards = await checkRuns(gh, owner, repo, head, cfg.guard, "github-actions", "started_at");
+    for (const guard of guards) {
       const res = await gh.rest<{ annotation_level: string; message: string }[]>("GET", `/repos/${owner}/${repo}/check-runs/${guard.id}/annotations?per_page=100`);
       if (res.status !== 200) throw new Error(`could not read the annotations of check run ${guard.id}: ${res.status}`);
-      if (res.data.some((a) => a.annotation_level === "notice" && NOT_REREVIEWED.test(a.message))) return true;
+      // A guard run that did not decline may have let a review start that then left no verdict, which is a miss.
+      if (!res.data.some((a) => a.annotation_level === "notice" && NOT_REREVIEWED.test(a.message))) return false;
     }
-    return false;
+    return guards.length > 0;
   }
 
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {
