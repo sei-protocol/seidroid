@@ -48,6 +48,7 @@ interface Run {
   external_id?: string;
   app: { slug: string };
   output: { title: string | null };
+  annotations?: { annotation_level: string; message: string }[];
 }
 
 /** checks fakes the GitHub check runs of o/r, which the comparer reads and settles, and its pull requests' commits. */
@@ -61,6 +62,8 @@ function checks(runs: Run[], pulls: Record<number, { updated: number; commits: s
         runs.find((r) => r.id === Number(patch[1]))!.external_id = body.external_id;
         return { status: 200, data: {} };
       }
+      const annotated = new RegExp(`^/repos/o/${repo}/check-runs/(\\d+)/annotations\\?per_page=100$`).exec(path);
+      if (method === "GET" && annotated) return { status: 200, data: runs.find((r) => r.id === Number(annotated[1]))!.annotations ?? [] };
       const listed = new RegExp(`^/repos/o/${repo}/commits/([\\w-]+)/check-runs\\?check_name=([^&]+)&filter=all&per_page=100$`).exec(path);
       if (method === "GET" && listed) return { status: 200, data: { check_runs: runs.filter((r) => r.head === listed[1] && r.name === decodeURIComponent(listed[2]!)).map((r) => ({ ...r })) } };
       if (method === "GET" && path === `/repos/o/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`) return { status: 200, data: Object.entries(pulls).map(([n, p]) => ({ number: Number(n), updated_at: at(p.updated), head: { sha: p.commits.at(-1) } })) };
@@ -77,7 +80,7 @@ function checks(runs: Run[], pulls: Record<number, { updated: number; commits: s
 const at = (s: number) => new Date(s * 1000).toISOString();
 const v2 = (id: number, head: string, done: number, externalId: string, title = "0 findings"): Run => ({ id, name: "Seidroid Review", head, status: "completed", conclusion: "success", started_at: at(done), completed_at: at(done), external_id: externalId, app: { slug: "seidroid" }, output: { title } });
 const v1 = (id: number, head: string, done: number, conclusion = "failure", title = "2 findings"): Run => ({ id, name: "review", head, status: "completed", conclusion, started_at: at(done), completed_at: at(done), app: { slug: "seidroid" }, output: { title } });
-const cfg = { check: "review", job: "j", waitMs: 1000_000, checkName: "Seidroid Review" };
+const cfg = { check: "review", job: "j", guard: "g", waitMs: 1000_000, checkName: "Seidroid Review" };
 
 test("comparer pairs each v2 review on a commit with one of v1's in order of completion, and keeps the pairing in the check runs", async () => {
   const m = metrics();
@@ -96,6 +99,23 @@ test("comparer pairs each v2 review on a commit with one of v1's in order of com
   assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="pass",v2="pass"\} 1\n/);
   assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="block",v2="pass"\} 1\n/);
   assert.match(text, /seidroid_compared_first_total\{repo="o\/r",reviewer="v2"\} 2\n/);
+});
+
+test("comparer tells v1 declining to review a commit again apart from v1 missing it", async () => {
+  const m = metrics();
+  const guard = (id: number, head: string, message: string): Run => ({ ...v1(id, head, 0, "success"), name: "g", app: { slug: "github-actions" }, annotations: [{ annotation_level: "warning", message: "Input 'app-id' has been deprecated" }, { annotation_level: "notice", message }] });
+  const declined = "o/r#1 already carries a verdict from this workflow, and this synchronize event does not earn another; comment @seidroid review to ask for one";
+  const runs = [guard(20, "h", declined), v2(1, "h", 1, "compare:pending"), v2(2, "h", 2, "compare:pending"), guard(21, "g", declined), { ...guard(23, "g", "o/r#1 asked for a review"), started_at: at(1) }, v2(3, "g", 1, "compare:pending"), guard(22, "f", declined), v1(9, "f", 1), v2(4, "f", 1, "compare:v1:9"), v2(5, "f", 2, "compare:pending")];
+  const { gh, reads } = checks(runs);
+  const c = comparer(m, { ...cfg, waitMs: 1000 }, { github: async () => gh, bot: async () => "seidroid[bot]" });
+  for (const head of ["h", "g", "f"]) c.add("o", "r", head);
+  await c.tick(5000);
+  assert.deepEqual([1, 2, 3, 5].map((id) => runs.find((r) => r.id === id)!.external_id), ["compare:not_rereviewed", "compare:not_rereviewed", "compare:missing", "compare:missing"]);
+  assert.deepEqual(reads.filter((r) => r.includes("annotations")), [20, 21, 23].map((id) => `GET /repos/o/r/check-runs/${id}/annotations?per_page=100`));
+  const text = await m.registry.metrics();
+  assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="not_rereviewed",v2="pass"\} 2\n/);
+  assert.match(text, /seidroid_comparisons_total\{repo="o\/r",v1="missing",v2="pass"\} 2\n/);
+  assert.doesNotMatch(text, /seidroid_compared_findings_count/);
 });
 
 test("comparer waits for v1's job to end, and counts v1 missing once it has waited long enough", async () => {
