@@ -32,7 +32,10 @@ runs:
         KEY_FILES: ${{ inputs.cache-key-files }}
       run: |
         set -f
-        sum=$({ printf '%s\0' "$PREPARE" "$CACHE"; for f in $KEY_FILES; do printf '%s\0' "$f"; cat -- "$TREE/$f" 2>/dev/null; printf '\0'; done; } | sha256sum | cut -c1-64)
+        tree=$(realpath -- "$TREE")
+        # A key file counts only as a regular file inside the tree, read up to 64 MiB, as the tree is the pull request's.
+        read_key() { local p; p=$(realpath -eq -- "$tree/$1") && [[ $p == "$tree"/* && -f $p ]] && head -c 67108864 -- "$p"; }
+        sum=$({ printf '%s\0' "$PREPARE" "$CACHE"; for f in $KEY_FILES; do printf '%s\0' "$f"; read_key "$f"; printf '\0'; done; } | sha256sum | cut -c1-64)
         eof=$(openssl rand -hex 16)
         {
           echo "key=seidroid-home-$RUNNER_OS-$RUNNER_ARCH-$sum"
@@ -55,8 +58,10 @@ runs:
         HOME_DIR: ${{ inputs.home }}
         PREPARE: ${{ inputs.prepare }}
       run: node .seidroid/src/job.ts prepare --work "$WORK" --home "$HOME_DIR" --prepare="$PREPARE"
+    # Prepare ran in the pull request's tree, so only a run in that pull request's own cache scope
+    # saves: what it leaves is restored by that pull request alone, never by others or the base.
     - name: Save the cache
-      if: inputs.cache != '' && steps.restore.outputs.cache-hit != 'true' && steps.prepare.outputs.prepared == 'true'
+      if: inputs.cache != '' && startsWith(github.ref, 'refs/pull/') && steps.restore.outputs.cache-hit != 'true' && steps.prepare.outputs.prepared == 'true'
       uses: actions/cache/save@v6
       with:
         key: ${{ steps.key.outputs.key }}
