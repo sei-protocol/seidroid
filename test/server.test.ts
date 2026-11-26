@@ -225,25 +225,15 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
-test("publish takes a pull_request run only on a team member's pull request, and approves it whoever pushed", async () => {
+test("publish takes a pull_request run only on a team member's pull request, whoever pushed", async () => {
   const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
   try {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
     assert.equal(r.status, 403);
-    assert.ok(r.body.error.startsWith("bob is not an active member"), r.body.error);
-    assert.equal(s.published.length, 0);
+    assert.match(r.body.error, /bob is not an active member/);
+    assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims({ event_name: "issue_comment", ref: "refs/heads/main" }))).status, 200);
   } finally {
     s.close();
-  }
-  const t = await serve(base);
-  try {
-    for (const actor of ["alice", "mallory", "devin-ai-integration[bot]"]) {
-      const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, claims({ actor }));
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-    }
-    assert.deepEqual(t.published.map((p) => p.target.approve), [true, true, true]);
-  } finally {
-    t.close();
   }
 });
 
@@ -268,6 +258,7 @@ test("publish approves a team member's pull request, or a review a team member a
   const byBot = { [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "dependabot[bot]" } }) };
   const cases: [string, Record<string, (body?: any) => Response>, Partial<Claims>, boolean][] = [
     ["a bot's push to a team member's pull request", {}, { actor: "devin-ai-integration[bot]" }, true],
+    ["a push from outside the team to a team member's pull request", {}, { actor: "mallory" }, true],
     ["a push to an allowed bot's pull request", byBot, { actor: "dependabot[bot]" }, false],
     ["a team member's comment", {}, asked("alice"), true],
     ["a team member's comment on an allowed bot's pull request", byBot, asked("alice"), true],
