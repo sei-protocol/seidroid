@@ -28,7 +28,7 @@ interface CheckRun {
   completed_at: string | null;
   external_id?: string | null;
   app: { slug: string } | null;
-  output: { title: string | null };
+  output: { title: string | null; summary: string | null; text: string | null };
 }
 
 /** The notice v1's guard leaves when a pull request already carries its verdict and a push does not earn another. */
@@ -217,7 +217,9 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
   }
 
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {
-    const res = await gh.rest("PATCH", `/repos/${owner}/${repo}/check-runs/${run.id}`, { external_id: externalId });
+    // An update that leaves out the output drops its text, which holds the findings /history reads the review back from.
+    const { title, summary, text } = run.output;
+    const res = await gh.rest("PATCH", `/repos/${owner}/${repo}/check-runs/${run.id}`, { external_id: externalId, output: { title, summary, text } });
     if (res.status !== 200) throw new Error(`could not settle check run ${run.id}: ${res.status}`);
   }
 
