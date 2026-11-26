@@ -96,11 +96,11 @@ function commentOf(ev: Event): { pr: number; body: string; id: number; bot: bool
 }
 
 /**
- * guard decides whether this event earns a review. A push by a team member or an allowed bot reviews a team
- * member's ready, same-repository pull request once, again on later pushes only with re-review on push or to lift
- * this App's change request; a team member or an allowed bot asks for one by comment at any time. Any other
- * comment from a team member that mentions the phrase earns a reply, outside shadow. In shadow, v1 posts its
- * reviews as the same App, so seidroid's own reviews are read from its check runs instead.
+ * guard decides whether this event earns a review. A push reviews a ready, same-repository pull request once,
+ * again on later pushes only with re-review on push or to lift this App's change request; a team member or an
+ * allowed bot asks for one by comment at any time. Any other comment from a team member that mentions the phrase
+ * earns a reply, outside shadow. In shadow, v1 posts its reviews as the same App, so seidroid's own reviews are
+ * read from its check runs instead.
  */
 export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow, ownReviews: OwnReviews): Promise<Gate> {
   const deny = (pr: number, reason: string): Gate => ({ run: false, reply: false, reason, pr, head: "", comment: 0, ask: "" });
@@ -133,9 +133,7 @@ export async function guard(ev: Event, o: GuardOptions, gh: GitHub, allow: Allow
   if (o.skipLabel && p.labels.some((l: { name: string }) => l.name === o.skipLabel)) return deny(pr, `the pull request has ${o.skipLabel}`);
   if (asked) return { ...admit(`${ev.actor} asked for a review`), comment: asked.id, ask: asked.bot ? "" : besides(asked.body, o.phrase) };
   if (p.draft) return deny(pr, "the pull request is a draft");
-  const team = await allow(pr);
-  if (!team.author) return deny(pr, `${p.user.login} is not on the team, so a team member must ask for this review`);
-  if (!team.actor) return deny(pr, `${ev.actor} is not on the team, so a team member must ask for this review`);
+  if (!(await allow(pr)).author) return deny(pr, `${p.user.login} is not on the team, so a team member must ask for this review`);
   const last = o.shadow ? await ownReviews(pr) : await lastReview(gh, base, pr);
   if (!last) return admit("the pull request has no review yet");
   if (ev.payload.action !== "synchronize") return deny(pr, "the pull request was already reviewed");

@@ -63,8 +63,8 @@ class HttpError extends Error {
 
 interface Pull {
   state: string;
-  head: { sha: string; repo: { id: number } | null };
-  base: { sha: string; repo: { id: number } };
+  head: { sha: string; ref: string; repo: { id: number } | null };
+  base: { sha: string; ref: string; repo: { id: number } };
   user: { login: string };
 }
 
@@ -108,12 +108,16 @@ const SHA = /^[0-9a-f]{40}$/;
 const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const NO_COMMIT = "0".repeat(40);
 const MAX_PUSHES = 50;
+const PUSHES_MS = 30_000;
 
-/** PUSHES reads the pushes GitHub recorded on a commit's check suites: the push that made it a branch's head. */
-const PUSHES = `query($owner: String!, $repo: String!, $sha: GitObjectID!) {
-  repository(owner: $owner, name: $repo) { object(oid: $sha) { ... on Commit { checkSuites(first: 100) {
-    totalCount nodes { push { previousSha pusher { __typename login } } }
-  } } } }
+/** PUSHES reads whether a commit is on the base branch, and the pushes GitHub recorded on its check suites: the push that made it a branch's head. */
+const PUSHES = `query($owner: String!, $repo: String!, $base: String!, $rev: String!, $sha: GitObjectID!) {
+  repository(owner: $owner, name: $repo) {
+    ref(qualifiedName: $base) { compare(headRef: $rev) { status } }
+    object(oid: $sha) { ... on Commit { checkSuites(first: 100) {
+      totalCount nodes { branch { name } push { previousSha pusher { __typename login } } }
+    } } }
+  }
 }`;
 
 interface Push {
@@ -168,27 +172,27 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
 
   /**
    * pushedByTeam says whether every push to the pull request's branch that led to head, back to a commit this App
-   * approved, the branch's creation or a commit on the base, was made by the team or an allowed bot. A commit
-   * with no recorded push, or with differing ones, counts against it.
+   * approved, the branch's creation or a commit on the base, was made by a team member. A commit with no recorded
+   * push to the branch, or with differing ones, counts against it, as does a walk past its push or time limit.
    */
   const pushedByTeam = async (gh: GitHub, owner: string, repo: string, pr: number, pull: Pull, head: string): Promise<boolean> => {
-    const base = `/repos/${owner}/${repo}`;
+    const until = Date.now() + PUSHES_MS;
     const bot = await deps.bot();
-    const reviews = await all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `${base}/pulls/${pr}/reviews`);
+    const reviews = await all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `/repos/${owner}/${repo}/pulls/${pr}/reviews`);
     const approved = new Set(reviews.filter((r) => r.state === "APPROVED" && r.user?.login === bot).map((r) => r.commit_id));
-    const admitted = new Map<string, boolean>();
-    for (let sha = head, n = 0; n < MAX_PUSHES; n++) {
+    const members = new Map<string, boolean>();
+    for (let sha = head, n = 0; n < MAX_PUSHES && Date.now() < until; n++) {
       if (sha === NO_COMMIT || approved.has(sha)) return true;
-      const onBase = await gh.rest<{ status: string }>("GET", `${base}/compare/${sha}...${pull.base.sha}`);
-      if (onBase.status === 200 && ["ahead", "identical"].includes(onBase.data.status)) return true;
-      const suites = (await gh.graphql<any>(PUSHES, { owner, repo, sha })).repository?.object?.checkSuites;
+      const { ref, object } = (await gh.graphql<any>(PUSHES, { owner, repo, base: `refs/heads/${pull.base.ref}`, rev: sha, sha })).repository ?? {};
+      if (["BEHIND", "IDENTICAL"].includes(ref?.compare?.status)) return true;
+      const suites = object?.checkSuites;
       if (!suites || suites.nodes.length < suites.totalCount) return false;
-      const pushes: Push[] = suites.nodes.flatMap((s: { push: Push | null }) => (s.push ? [s.push] : []));
+      const pushes: Push[] = suites.nodes.flatMap((s: { branch: { name: string } | null; push: Push | null }) => (s.push && s.branch?.name === pull.head.ref ? [s.push] : []));
       const [p] = pushes;
-      if (!p?.pusher || pushes.some((q) => key(q) !== key(p))) return false;
-      const pusher = p.pusher.__typename === "Bot" ? `${p.pusher.login}[bot]` : p.pusher.login;
-      if (!admitted.has(pusher)) admitted.set(pusher, await admits(gh, pusher));
-      if (!admitted.get(pusher)) return false;
+      if (p?.pusher?.__typename !== "User" || pushes.some((q) => key(q) !== key(p))) return false;
+      const login = p.pusher.login;
+      if (!members.has(login)) members.set(login, await member(gh, login));
+      if (!members.get(login)) return false;
       sha = p.previousSha;
     }
     return false;
@@ -207,7 +211,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     return ran !== undefined && ran === onBase;
   };
 
-  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and on a team member's pull request, and any run only from the team or an allowed bot. */
+  /** admitted holds a run to the guard's rules: no forks, a push run only on its own pull request, from its base's workflow and on a team member's pull request, and a request only from the team or an allowed bot. */
   const admitted = async (gh: GitHub, claims: Claims, pr: number, pull: Pull): Promise<void> => {
     if (pull.head.repo?.id !== pull.base.repo.id) throw new HttpError(403, `pull request ${pr} comes from a fork`, "fork");
     if (claims.event_name === "pull_request") {
@@ -216,8 +220,8 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       if (!CALLER.test(caller) || !(await callerOnBase(gh, claims, caller))) {
         throw new HttpError(403, `pull request ${pr} changes ${caller || claims.workflow_ref}, the workflow it runs; a team member can ask for its review in a comment`, "workflow_changed");
       }
-      for (const login of new Set([pull.user.login, claims.actor])) {
-        if (!(await admits(gh, login))) throw new HttpError(403, `${login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
+      if (!(await admits(gh, pull.user.login))) {
+        throw new HttpError(403, `${pull.user.login} is not an active member of ${cfg.team}; a team member can ask for its review in a comment`, "team");
       }
     } else if (!(await admits(gh, claims.actor))) {
       throw new HttpError(403, `${claims.actor} is not an active member of ${cfg.team}`, "team");
@@ -373,7 +377,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
           console.warn(`could not read the pushes to pull request ${pr}: ${e.message}`);
           return false;
         }));
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, outsidePush: asked && !approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, unconfirmedPushes: asked && !approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
       const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);

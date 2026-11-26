@@ -144,9 +144,9 @@ export function fit(body: string, max = MAX_BODY): string {
 }
 
 /** summaryComment is the review's body as posted: marker, prose, and how the review was decided. */
-export function summaryComment(v: Verdict, includeNits: boolean, runUrl: string, unplaced: readonly Finding[] = [], moved?: Moved, outsidePush = false): string {
+export function summaryComment(v: Verdict, includeNits: boolean, runUrl: string, unplaced: readonly Finding[] = [], moved?: Moved, unconfirmedPushes = false): string {
   const how = v.settledBy ? `settled by ${v.settledBy} with no review turn` : `the review wrote ${code(v.submission.decision)}`;
-  const note = moved ? `${movedNote(moved)}\n\n` : outsidePush ? `${OUTSIDE_PUSH}\n\n` : "";
+  const note = moved ? `${movedNote(moved)}\n\n` : unconfirmedPushes ? `${UNCONFIRMED_PUSHES}\n\n` : "";
   return `${MARKER.verdict}\n${fit(note + reviewBody(v, includeNits, unplaced))}\n\n<sub>Seidroid Review · ${how} · [run](${runUrl})</sub>`;
 }
 
@@ -159,7 +159,7 @@ export interface Moved {
 const movedNote = (m: Moved): string =>
   `**The head moved during this review.** It read ${code(m.read.slice(0, 12))}, but the pull request is now at ${code(m.head.slice(0, 12))}, which it has not read, so it lists any findings here rather than on the code and records no approval.`;
 
-const OUTSIDE_PUSH = "**Posted as a comment.** Not every push to this pull request since its last approval here was made by the team or an allowed bot, so this review records no approval.";
+const UNCONFIRMED_PUSHES = "**Posted as a comment.** This review could not confirm that a team member made every push to this pull request since its last approval here, so it records no approval.";
 
 /** findingComment is an inline finding's body; cited marks one that fell back to the whole file. */
 export function findingComment(f: Finding, cited = false): string {

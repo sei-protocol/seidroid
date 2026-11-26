@@ -23,8 +23,8 @@ export interface Target {
   aiReviewCheck: boolean;
   /** Approve a clean review; without it a clean review only comments. */
   approve: boolean;
-  /** A push since this App's last approval came from outside the team or has no record of who made it, so approve is off. */
-  outsidePush?: boolean;
+  /** Approve is off because no team member is confirmed to have made every push since this App's last approval. */
+  unconfirmedPushes?: boolean;
   /** The check run's external_id, if any. */
   externalId?: string;
 }
@@ -102,7 +102,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
       const res = await gh.rest("POST", `${base}/pulls/${t.pr}/reviews`, {
         commit_id: t.head,
         event,
-        body: summaryComment(v, t.includeNits, t.runUrl, unplaced, moved, decision === "approve" && t.outsidePush === true),
+        body: summaryComment(v, t.includeNits, t.runUrl, unplaced, moved, decision === "approve" && t.unconfirmedPushes === true),
         comments: comments.map((f) => ({ path: f.file, line: f.line, side: f.side, body: findingComment(f) })),
       });
       return res.status >= 500 || res.status === 0 ? landedAnyway(gh, base, t, res) : res;

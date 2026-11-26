@@ -58,7 +58,7 @@ on:
         type: string
         default: 'ai: nitpick'
       approve-on-success:
-        description: Approve the pull request when the review is clean and every push since the App's last approval came from the team or an allowed bot. Without it, a clean review only comments.
+        description: Approve the pull request when the review is clean and a team member made every push since the App's last approval. Without it, a clean review only comments.
         type: boolean
         default: false
       guidelines-file:

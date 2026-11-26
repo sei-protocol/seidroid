@@ -272,15 +272,15 @@ test("publish posts nothing on the code and never approves once the head has mov
   assert.deepEqual(blocked.of("POST /repos/o/r/pulls/7/reviews").map((x: any) => [x.event, x.comments.length]), [["REQUEST_CHANGES", 0]]);
 });
 
-test("publish comments with a note, rather than approving, a clean review that covers a push from outside the team", async () => {
+test("publish comments with a note, rather than approving, a clean review whose pushes it cannot confirm as the team's", async () => {
   const clean = fake({});
-  await publish(clean.gh, { ...T, approve: false, outsidePush: true }, { verdict: verdict({}) });
+  await publish(clean.gh, { ...T, approve: false, unconfirmedPushes: true }, { verdict: verdict({}) });
   const [review] = clean.of("POST /repos/o/r/pulls/7/reviews");
   assert.equal(review.event, "COMMENT");
-  assert.match(review.body, /^<!-- seidroid-review -->\n\*\*Posted as a comment.\*\* Not every push/);
+  assert.match(review.body, /^<!-- seidroid-review -->\n\*\*Posted as a comment.\*\* This review could not confirm/);
 
   const blocked = fake({});
-  await publish(blocked.gh, { ...T, approve: false, outsidePush: true }, { verdict: verdict({ inline_comments: [comment()] }) });
+  await publish(blocked.gh, { ...T, approve: false, unconfirmedPushes: true }, { verdict: verdict({ inline_comments: [comment()] }) });
   const [changes] = blocked.of("POST /repos/o/r/pulls/7/reviews");
   assert.equal(changes.event, "REQUEST_CHANGES");
   assert.doesNotMatch(changes.body, /Posted as a comment/);
