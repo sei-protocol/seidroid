@@ -30,4 +30,14 @@ A panic or data race reachable through an exported API whose documentation
 says the call is safe (twice, concurrently, after a failure) breaks a stated
 contract. Anything else is non-blocking.
 
+Some facts cannot be checked from here: what a CI runner image ships, whether
+a secret or variable is set, how a service outside the repository behaves.
+Finding nothing in the repository that provides one does not show it is
+missing. A problem that holds only if such a fact is so is not blocking: post
+it as a suggestion that names the fact to confirm. If your finding would say
+"unless" or "if" about one, it is this kind. This is about whether the change
+works, not whether it is safe: a security risk still blocks. Code paths and
+configuration the repository itself sets are not such facts; check those as
+usual.
+
 Skip style, formatting and naming entirely. Do not restate the diff.
