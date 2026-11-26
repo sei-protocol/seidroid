@@ -8,7 +8,7 @@ import { parseAccepted } from "./accepted.ts";
 import { comparer, pending, type CompareConfig } from "./compare.ts";
 import { failureReason, metrics, recordRuns, runStats, type Metrics } from "./metrics.ts";
 import { publish, recordedHistory, type Outcome, type Report } from "./publish.ts";
-import { replyBody } from "./render.ts";
+import { replyBody, type Unapproved } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { files, MAX_SESSION } from "./session.ts";
 import { clip, guidelinesPath, oneLine } from "./text.ts";
@@ -63,8 +63,8 @@ class HttpError extends Error {
 
 interface Pull {
   state: string;
-  head: { sha: string; ref: string; repo: { id: number } | null };
-  base: { sha: string; ref: string; repo: { id: number } };
+  head: { sha: string; repo: { id: number } | null };
+  base: { sha: string; repo: { id: number } };
   user: { login: string };
 }
 
@@ -106,25 +106,15 @@ const MAX_REQUEST = 1 << 20;
 const COMPARE_EVERY_MS = 2 * 60_000;
 const SHA = /^[0-9a-f]{40}$/;
 const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
-const NO_COMMIT = "0".repeat(40);
-const MAX_PUSHES = 50;
-const PUSHES_MS = 30_000;
+const COMMITS_MS = 30_000;
+/** MAX_PULL_COMMITS is as many commits as GitHub lists on a pull request. */
+const MAX_PULL_COMMITS = 250;
 
-/** PUSHES reads whether a commit is on the base branch, and the pushes GitHub recorded on its check suites: the push that made it a branch's head. */
-const PUSHES = `query($owner: String!, $repo: String!, $base: String!, $rev: String!, $sha: GitObjectID!) {
-  repository(owner: $owner, name: $repo) {
-    ref(qualifiedName: $base) { compare(headRef: $rev) { status } }
-    object(oid: $sha) { ... on Commit { checkSuites(first: 100) {
-      totalCount nodes { branch { name } push { previousSha pusher { __typename login } } }
-    } } }
-  }
-}`;
-
-interface Push {
-  previousSha: string;
-  pusher: { __typename: string; login: string } | null;
+interface Signed {
+  sha: string;
+  commit: { verification?: { verified: boolean } };
+  committer: { login: string } | null;
 }
-const key = (p: Push): string => `${p.previousSha} ${p.pusher?.__typename} ${p.pusher?.login}`;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -171,31 +161,50 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   };
 
   /**
-   * pushedByTeam says whether every push to the pull request's branch that led to head, back to a commit this App
-   * approved, the branch's creation or a commit on the base, was made by a team member. A commit with no recorded
-   * push to the branch, or with differing ones, counts against it, as does a walk past its push or time limit.
+   * withholds says why a clean review may not approve, or undefined when it may. A pull_request run's pull request
+   * must be a team member's, whoever pushed to it, and any other run must be a team member's request, not an allowed
+   * bot's. With verified commits required, every commit on the pull request since this App's last approval there
+   * must also carry a signature GitHub verified, committed by a team member; reads that fail or take too long count
+   * against it.
    */
-  const pushedByTeam = async (gh: GitHub, owner: string, repo: string, pr: number, pull: Pull, head: string): Promise<boolean> => {
-    const until = Date.now() + PUSHES_MS;
-    const bot = await deps.bot();
-    const reviews = await all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `/repos/${owner}/${repo}/pulls/${pr}/reviews`);
-    const approved = new Set(reviews.filter((r) => r.state === "APPROVED" && r.user?.login === bot).map((r) => r.commit_id));
+  const withholds = async (gh: GitHub, claims: Claims, base: string, pr: number, pull: Pull, head: string, verified: boolean): Promise<Unapproved | undefined> => {
+    if (!(await member(gh, claims.event_name === "pull_request" ? pull.user.login : claims.actor))) return "requester";
+    if (!verified) return undefined;
+    const signed = await within(COMMITS_MS, signedByTeam(gh, base, pr, head)).catch((e: Error) => {
+      console.warn(`could not read the commits on pull request ${pr}: ${e.message}`);
+      return false;
+    });
+    return signed ? undefined : "commits";
+  };
+
+  /**
+   * signedByTeam says whether every commit on the pull request that head has and this App's latest approval there
+   * lacks, or every commit on it when there is none, was committed by a team member with a signature GitHub verified.
+   * Commits the base brought in by a merge are not the pull request's, so they do not count.
+   */
+  const signedByTeam = async (gh: GitHub, base: string, pr: number, head: string): Promise<boolean> => {
+    const [bot, reviews, listed] = await Promise.all([
+      deps.bot(),
+      all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `${base}/pulls/${pr}/reviews`),
+      all<Signed>(gh, `${base}/pulls/${pr}/commits`, Math.ceil(MAX_PULL_COMMITS / 100)),
+    ]);
+    const since = reviews.findLast((r) => r.state === "APPROVED" && r.user?.login === bot)?.commit_id;
+    let commits = listed;
+    if (commits.length >= MAX_PULL_COMMITS) return false;
+    if (since) {
+      const cmp = await gh.rest<{ total_commits: number; commits: { sha: string }[] }>("GET", `${base}/compare/${since}...${head}`);
+      if (cmp.status !== 200 || cmp.data.commits.length < cmp.data.total_commits) return false;
+      const fresh = new Set(cmp.data.commits.map((c) => c.sha));
+      commits = commits.filter((c) => fresh.has(c.sha));
+    }
     const members = new Map<string, boolean>();
-    for (let sha = head, n = 0; n < MAX_PUSHES && Date.now() < until; n++) {
-      if (sha === NO_COMMIT || approved.has(sha)) return true;
-      const { ref, object } = (await gh.graphql<any>(PUSHES, { owner, repo, base: `refs/heads/${pull.base.ref}`, rev: sha, sha })).repository ?? {};
-      if (["BEHIND", "IDENTICAL"].includes(ref?.compare?.status)) return true;
-      const suites = object?.checkSuites;
-      if (!suites || suites.nodes.length < suites.totalCount) return false;
-      const pushes: Push[] = suites.nodes.flatMap((s: { branch: { name: string } | null; push: Push | null }) => (s.push && s.branch?.name === pull.head.ref ? [s.push] : []));
-      const [p] = pushes;
-      if (p?.pusher?.__typename !== "User" || pushes.some((q) => key(q) !== key(p))) return false;
-      const login = p.pusher.login;
+    for (const c of commits) {
+      const login = c.committer?.login;
+      if (!c.commit.verification?.verified || !login) return false;
       if (!members.has(login)) members.set(login, await member(gh, login));
       if (!members.get(login)) return false;
-      sha = p.previousSha;
     }
-    return false;
+    return true;
   };
 
   /** callerOnBase says whether a pull_request run's calling workflow is the same file as on the base of the merge it runs on. */
@@ -371,13 +380,9 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const compared = cmp && shadow;
       // A push run approves only the head it was started for, which a re-run or a later push may have moved past.
       const asked = body.approve === true && (claims.event_name !== "pull_request" || (await mergeParents(gh, claims))[1] === body.head);
-      const approve =
-        asked &&
-        (await pushedByTeam(gh, owner, repo, pr, pull, body.head).catch((e: Error) => {
-          console.warn(`could not read the pushes to pull request ${pr}: ${e.message}`);
-          return false;
-        }));
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, unconfirmedPushes: asked && !approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
+      const unapproved = asked ? await withholds(gh, claims, base, pr, pull, body.head, body.requireVerifiedCommits === true) : undefined;
+      const approve = asked && !unapproved;
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, unapproved, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
       const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
@@ -419,6 +424,16 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(out));
   };
+}
+
+/** within is p, or a rejection once ms pass without it settling. */
+async function within<T>(ms: number, p: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([p, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error(`no answer within ${ms / 1000}s`)), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 const seconds = (ms: unknown): number | undefined => (typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 6 * 3600_000) / 1000 : undefined);

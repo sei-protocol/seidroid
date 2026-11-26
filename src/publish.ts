@@ -1,7 +1,7 @@
 import { all, type GitHub, type Response } from "./github.ts";
 import { recordedThreads, recordFindings, type PriorThread } from "./history.ts";
 import { partition, type DiffFile } from "./place.ts";
-import { checkOutput, findingComment, findingDetail, MARKER, noVerdict, repeatComment, summaryComment, type CheckOutput, type Moved } from "./render.ts";
+import { checkOutput, findingComment, findingDetail, MARKER, noVerdict, repeatComment, summaryComment, type CheckOutput, type Moved, type Unapproved } from "./render.ts";
 import { scanSecrets } from "./secrets.ts";
 import { buildThreadPlan, placeableFindings, standing, type Finding, type ThreadPlan, type Verdict } from "./verdict.ts";
 
@@ -23,8 +23,8 @@ export interface Target {
   aiReviewCheck: boolean;
   /** Approve a clean review; without it a clean review only comments. */
   approve: boolean;
-  /** Approve is off because no team member is confirmed to have made every push since this App's last approval. */
-  unconfirmedPushes?: boolean;
+  /** Why approve is off for a run that asked to approve, noted on a clean review. */
+  unapproved?: Unapproved;
   /** The check run's external_id, if any. */
   externalId?: string;
 }
@@ -102,7 +102,7 @@ export async function publish(gh: GitHub, t: Target, outcome: Outcome, literals:
       const res = await gh.rest("POST", `${base}/pulls/${t.pr}/reviews`, {
         commit_id: t.head,
         event,
-        body: summaryComment(v, t.includeNits, t.runUrl, unplaced, moved, decision === "approve" && t.unconfirmedPushes === true),
+        body: summaryComment(v, t.includeNits, t.runUrl, unplaced, moved, decision === "approve" ? t.unapproved : undefined),
         comments: comments.map((f) => ({ path: f.file, line: f.line, side: f.side, body: findingComment(f) })),
       });
       return res.status >= 500 || res.status === 0 ? landedAnyway(gh, base, t, res) : res;

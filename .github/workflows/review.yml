@@ -58,7 +58,15 @@ on:
         type: string
         default: 'ai: nitpick'
       approve-on-success:
-        description: Approve the pull request when the review is clean and a team member made every push since the App's last approval. Without it, a clean review only comments.
+        description: >-
+          Approve the pull request when the review is clean and the pull request is a team member's or a team member
+          asked for the review in a comment. Without it, a clean review only comments.
+        type: boolean
+        default: false
+      require-verified-commits:
+        description: >-
+          With approve-on-success, approve only when every commit on the pull request since the App's last approval
+          carries a signature GitHub verified, committed by a team member. Otherwise a clean review only comments.
         type: boolean
         default: false
       guidelines-file:
@@ -229,6 +237,7 @@ jobs:
           ASK: ${{ needs.guard.outputs.ask }}
           PREPARE: ${{ inputs.prepare }}
           APPROVE: ${{ inputs.approve-on-success }}
+          VERIFIED_COMMITS: ${{ inputs.require-verified-commits }}
           GUIDELINES: ${{ inputs.guidelines-file }}
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
           PRIVATE: ${{ github.event.repository.private == true }}
@@ -238,7 +247,7 @@ jobs:
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
           --nitpick-label "$NITPICK" --extra-instructions="$EXTRA" --ask="$ASK"
           --home "$RUNNER_TEMP/seidroid-home" --prepare="$PREPARE"
-          --approve-on-success "$APPROVE" --guidelines-file "$GUIDELINES" --private "$PRIVATE"
+          --approve-on-success "$APPROVE" --require-verified-commits "$VERIFIED_COMMITS" --guidelines-file "$GUIDELINES" --private "$PRIVATE"
           --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"
       - name: React to the outcome
         if: always() && inputs.shadow == false && needs.guard.outputs.comment != '0' && github.event_name != 'pull_request_review'

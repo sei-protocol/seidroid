@@ -17,6 +17,16 @@ It is in development, and runs beside the current review in
 | `test/` | Tests, ported from the current review driver's. |
 | `chart/` | The Helm chart for the service, published to `oci://ghcr.io/sei-protocol/charts` with the image. |
 
+## Approval
+
+With `approve-on-success`, a clean review approves when the pull request's author is on the
+team, for the reviews a push, opening or turning ready starts, or when a team member asked for
+the review by commenting `@seidroid review`. A review an allowed bot asks for, or one of an
+allowed bot's pull request that no team member asked for, posts as a comment. Callers that also
+set `require-verified-commits: true` get an approval only when every commit on the pull request
+since the App's last approval there carries a signature GitHub verified, committed by a team
+member. Callers that do not send it, such as v0.3.4, approve as if it were off.
+
 ## Development
 
 Node 24 runs the TypeScript directly, so there is no build step.

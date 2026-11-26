@@ -272,18 +272,21 @@ test("publish posts nothing on the code and never approves once the head has mov
   assert.deepEqual(blocked.of("POST /repos/o/r/pulls/7/reviews").map((x: any) => [x.event, x.comments.length]), [["REQUEST_CHANGES", 0]]);
 });
 
-test("publish comments with a note, rather than approving, a clean review whose pushes it cannot confirm as the team's", async () => {
-  const clean = fake({});
-  await publish(clean.gh, { ...T, approve: false, unconfirmedPushes: true }, { verdict: verdict({}) });
-  const [review] = clean.of("POST /repos/o/r/pulls/7/reviews");
-  assert.equal(review.event, "COMMENT");
-  assert.match(review.body, /^<!-- seidroid-review -->\n\*\*Posted as a comment.\*\* This review could not confirm/);
+test("publish comments with a note, rather than approving, a clean review it may not approve", async () => {
+  for (const [unapproved, note] of [["requester", /Only a review of a team member's pull request/], ["commits", /could not confirm that every commit/]] as const) {
+    const clean = fake({});
+    await publish(clean.gh, { ...T, approve: false, unapproved }, { verdict: verdict({}) });
+    const [review] = clean.of("POST /repos/o/r/pulls/7/reviews");
+    assert.equal(review.event, "COMMENT");
+    assert.match(review.body, /^<!-- seidroid-review -->\n\*\*Posted as a comment.\*\* /);
+    assert.match(review.body, note);
 
-  const blocked = fake({});
-  await publish(blocked.gh, { ...T, approve: false, unconfirmedPushes: true }, { verdict: verdict({ inline_comments: [comment()] }) });
-  const [changes] = blocked.of("POST /repos/o/r/pulls/7/reviews");
-  assert.equal(changes.event, "REQUEST_CHANGES");
-  assert.doesNotMatch(changes.body, /Posted as a comment/);
+    const blocked = fake({});
+    await publish(blocked.gh, { ...T, approve: false, unapproved }, { verdict: verdict({ inline_comments: [comment()] }) });
+    const [changes] = blocked.of("POST /repos/o/r/pulls/7/reviews");
+    assert.equal(changes.event, "REQUEST_CHANGES");
+    assert.doesNotMatch(changes.body, /Posted as a comment/);
+  }
 });
 
 test("publish withdraws an approval, and resolves nothing, when the head moved or went unread while it was posted", async () => {
