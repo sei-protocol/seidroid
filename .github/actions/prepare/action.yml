@@ -1,0 +1,63 @@
+name: Prepare the shell
+description: >-
+  Runs the caller's prepare command in the reviewed tree, sandboxed but online, and keeps the
+  paths it names under the shell's home in the Actions cache. The cache is restored before and
+  saved straight after the command, so nothing the review later runs in the sandbox is saved.
+inputs:
+  work:
+    required: true
+  home:
+    required: true
+  prepare:
+    required: true
+  cache:
+    description: Paths under the shell's home, one per line, to keep in the Actions cache. Empty caches nothing.
+    default: ''
+  cache-key-files:
+    description: Files in the reviewed tree, separated by whitespace, whose contents key the cache, such as go.mod and go.sum.
+    default: ''
+runs:
+  using: composite
+  steps:
+    # The key covers the command and the paths too, so changing either starts a fresh cache.
+    - name: Key the cache
+      id: key
+      if: inputs.cache != ''
+      shell: bash
+      env:
+        TREE: ${{ inputs.work }}/tree
+        HOME_DIR: ${{ inputs.home }}
+        PREPARE: ${{ inputs.prepare }}
+        CACHE: ${{ inputs.cache }}
+        KEY_FILES: ${{ inputs.cache-key-files }}
+      run: |
+        set -f
+        sum=$({ printf '%s\0' "$PREPARE" "$CACHE"; for f in $KEY_FILES; do printf '%s\0' "$f"; cat -- "$TREE/$f" 2>/dev/null; printf '\0'; done; } | sha256sum | cut -c1-64)
+        eof=$(openssl rand -hex 16)
+        {
+          echo "key=seidroid-home-$RUNNER_OS-$RUNNER_ARCH-$sum"
+          echo "paths<<$eof"
+          printf '%s\n' "$CACHE" | sed '/^[[:space:]]*$/d; s|^[[:space:]]*|'"$HOME_DIR"'/|'
+          echo "$eof"
+        } >> "$GITHUB_OUTPUT"
+    - name: Restore the cache
+      id: restore
+      if: inputs.cache != ''
+      uses: actions/cache/restore@v6
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: ${{ steps.key.outputs.paths }}
+    - name: Prepare
+      id: prepare
+      shell: bash
+      env:
+        WORK: ${{ inputs.work }}
+        HOME_DIR: ${{ inputs.home }}
+        PREPARE: ${{ inputs.prepare }}
+      run: node .seidroid/src/job.ts prepare --work "$WORK" --home "$HOME_DIR" --prepare="$PREPARE"
+    - name: Save the cache
+      if: inputs.cache != '' && steps.restore.outputs.cache-hit != 'true' && steps.prepare.outputs.prepared == 'true'
+      uses: actions/cache/save@v6
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: ${{ steps.key.outputs.paths }}

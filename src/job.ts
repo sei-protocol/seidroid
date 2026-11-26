@@ -447,25 +447,33 @@ async function pullAt(gh: GitHub, base: string, pr: number, head: string): Promi
 const PREPARE_MS = 15 * 60_000;
 
 /**
- * shellHome readies the sandboxed shell of a review or reply and returns its home, after running the
- * caller's prepare command in the tree with the network; undefined when no shell is asked
- * for or the runner cannot sandbox one.
+ * prepare runs the caller's prepare command in the reviewed tree, sandboxed but online, to fill the
+ * shell's home with what an offline review needs, and records whether it succeeded as the
+ * step's prepared output.
  */
-function shellHome(o: Record<string, string>, work: string): string | undefined {
+function prepare(o: Record<string, string>): void {
+  let ok = false;
+  if (o.prepare && canSandbox()) {
+    mkdirSync(o.home, { recursive: true });
+    const jail = { work: path.join(path.resolve(o.work), TREE), home: o.home, path: process.env.PATH ?? "/usr/bin:/bin", net: true };
+    const stop = randomUUID();
+    console.log(`::stop-commands::${stop}`);
+    const r = spawnSync("bwrap", [...bwrapArgs(jail), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS, env: { PATH: jail.path } });
+    console.log(`::${stop}::`);
+    ok = r.status === 0;
+    if (!ok) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the shell may lack what the tree needs`);
+  }
+  appendFileSync(process.env.GITHUB_OUTPUT!, `prepared=${ok}\n`);
+}
+
+/** shellHome readies the sandboxed shell of a review or reply and returns its home; undefined when no shell is asked for or the runner cannot sandbox one. */
+function shellHome(o: Record<string, string>): string | undefined {
   if (!o.home) return undefined;
   if (!canSandbox()) {
     console.log("::warning::bubblewrap cannot sandbox a shell here, so the model only reads");
     return undefined;
   }
   mkdirSync(o.home, { recursive: true });
-  if (o.prepare) {
-    const jail = { work: path.join(work, TREE), home: o.home, path: process.env.PATH ?? "/usr/bin:/bin", net: true };
-    const stop = randomUUID();
-    console.log(`::stop-commands::${stop}`);
-    const r = spawnSync("bwrap", [...bwrapArgs(jail), "bash", "-c", o.prepare], { stdio: ["ignore", "inherit", "inherit"], timeout: PREPARE_MS, env: { PATH: jail.path } });
-    console.log(`::${stop}::`);
-    if (r.status !== 0) console.log(`::warning::prepare failed (${r.error?.message ?? `exit ${r.status}`}), so the shell may lack what the tree needs`);
-  }
   return o.home;
 }
 
@@ -538,7 +546,7 @@ async function review(o: Record<string, string>): Promise<void> {
   if (o["guidelines-file"] && guidelines !== o["guidelines-file"]) console.log(`::warning::guidelines-file ${o["guidelines-file"]} is not a plain repository path; reading REVIEW.md instead`);
   const { diffLines, hasStandards, base } = lay(work, pull, guidelines);
   recordInputs(o.out, work, pull);
-  const home = shellHome(o, work);
+  const home = shellHome(o);
   process.chdir(work);
   const timeoutMs = Number(o["timeout-seconds"]) * 1000;
   const transcript = keepsTranscripts(o);
@@ -585,7 +593,7 @@ async function reply(o: Record<string, string>): Promise<void> {
   const { diffLines } = lay(work, pull);
   writeFileSync(path.join(work, QUESTION), await conversation(gh, base, pr, process.env.GITHUB_EVENT_NAME!, comment));
   recordInputs(o.out, work, pull);
-  const home = shellHome(o, work);
+  const home = shellHome(o);
   process.chdir(work);
   const dir = path.join(o.out, "reply");
   const request = { repo: `${owner}/${repo}`, pr, diffLines, hasShell: home !== undefined, extraInstructions: o["extra-instructions"] || undefined };
@@ -619,7 +627,8 @@ async function main(): Promise<void> {
   if (positionals[0] === "review") return review(o);
   if (positionals[0] === "reply") return reply(o);
   if (positionals[0] === "react") return react(o);
-  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply|react [--option value ...]");
+  if (positionals[0] === "prepare") return prepare(o);
+  if (positionals[0] !== "guard") throw new Error("usage: job.ts guard|review|reply|react|prepare [--option value ...]");
   const ev: Event = { name: process.env.GITHUB_EVENT_NAME!, actor: process.env.GITHUB_ACTOR!, payload: JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, "utf8")) };
   const opts = { phrase: o["trigger-phrase"], skipLabel: o["skip-review-label"], reReviewOnPush: o["re-review-on-push"] === "true", allowedBots: lines(o["allowed-bots"]), shadow: o.shadow !== "false" };
   const gate = await guard(ev, opts, client(process.env.GITHUB_TOKEN!), (pr, comment) => service(o.service, "/allow", { pr, comment }), async (pr) => standingOf(await service(o.service, "/history", { pr })));

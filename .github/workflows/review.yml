@@ -90,6 +90,15 @@ on:
       prepare:
         type: string
         default: ''
+      # Paths under the shell's home, one per line, that prepare fills and the Actions cache keeps,
+      # such as `go/pkg/mod`. The cache is keyed on prepare, these paths and the contents of the
+      # tree files in cache-key-files, such as `go.mod go.sum`. Empty caches nothing.
+      cache:
+        type: string
+        default: ''
+      cache-key-files:
+        type: string
+        default: ''
       timeout-minutes:
         type: number
         default: 60
@@ -204,6 +213,15 @@ jobs:
           path: review/tree
           fetch-depth: 0
           persist-credentials: false
+      - name: Prepare the shell
+        if: inputs.prepare != ''
+        uses: ./.seidroid/.github/actions/prepare
+        with:
+          work: review
+          home: ${{ runner.temp }}/seidroid-home
+          prepare: ${{ inputs.prepare }}
+          cache: ${{ inputs.cache }}
+          cache-key-files: ${{ inputs.cache-key-files }}
       - name: Review
         id: review
         env:
@@ -227,7 +245,6 @@ jobs:
           NITPICK: ${{ inputs.nitpick-label }}
           EXTRA: ${{ inputs.extra-instructions }}
           ASK: ${{ needs.guard.outputs.ask }}
-          PREPARE: ${{ inputs.prepare }}
           APPROVE: ${{ inputs.approve-on-success }}
           GUIDELINES: ${{ inputs.guidelines-file }}
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
@@ -237,7 +254,7 @@ jobs:
           --ai-review-check "$AI_REVIEW_CHECK" --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session"
           --review-model "$REVIEW_MODEL" --scout-models "$SCOUT_MODELS" --thinking "$THINKING"
           --nitpick-label "$NITPICK" --extra-instructions="$EXTRA" --ask="$ASK"
-          --home "$RUNNER_TEMP/seidroid-home" --prepare="$PREPARE"
+          --home "$RUNNER_TEMP/seidroid-home"
           --approve-on-success "$APPROVE" --guidelines-file "$GUIDELINES" --private "$PRIVATE"
           --timeout-seconds "$(( TIMEOUT_MINUTES * 60 / 2 ))"
       - name: React to the outcome
@@ -299,6 +316,15 @@ jobs:
           path: review/tree
           fetch-depth: 0
           persist-credentials: false
+      - name: Prepare the shell
+        if: inputs.prepare != ''
+        uses: ./.seidroid/.github/actions/prepare
+        with:
+          work: review
+          home: ${{ runner.temp }}/seidroid-home
+          prepare: ${{ inputs.prepare }}
+          cache: ${{ inputs.cache }}
+          cache-key-files: ${{ inputs.cache-key-files }}
       - name: Reply
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -316,12 +342,11 @@ jobs:
           REVIEW_MODEL: ${{ inputs.review-model }}
           THINKING: ${{ inputs.thinking }}
           EXTRA: ${{ inputs.extra-instructions }}
-          PREPARE: ${{ inputs.prepare }}
           PRIVATE: ${{ github.event.repository.private == true }}
         run: >-
           node .seidroid/src/job.ts reply --service "$SERVICE" --pr "$PR" --head "$HEAD" --comment "$COMMENT" --shadow "$SHADOW"
           --work review --out "$RUNNER_TEMP/seidroid-out" --session-dir "$RUNNER_TEMP/seidroid-session" --review-model "$REVIEW_MODEL" --thinking "$THINKING"
-          --extra-instructions="$EXTRA" --home "$RUNNER_TEMP/seidroid-home" --prepare="$PREPARE" --timeout-seconds 600 --private "$PRIVATE"
+          --extra-instructions="$EXTRA" --home "$RUNNER_TEMP/seidroid-home" --timeout-seconds 600 --private "$PRIVATE"
       - name: Take the eyes back
         if: always() && github.event_name != 'pull_request_review'
         env:
