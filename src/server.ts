@@ -107,8 +107,6 @@ const COMPARE_EVERY_MS = 2 * 60_000;
 const SHA = /^[0-9a-f]{40}$/;
 const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 const COMMITS_MS = 30_000;
-/** MAX_PULL_COMMITS is as many commits as GitHub lists on a pull request. */
-const MAX_PULL_COMMITS = 250;
 
 interface Signed {
   sha: string;
@@ -170,7 +168,7 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   const withholds = async (gh: GitHub, claims: Claims, base: string, pr: number, pull: Pull, head: string, verified: boolean): Promise<Unapproved | undefined> => {
     if (!(await member(gh, claims.event_name === "pull_request" ? pull.user.login : claims.actor))) return "requester";
     if (!verified) return undefined;
-    const signed = await within(COMMITS_MS, signedByTeam(gh, base, pr, head)).catch((e: Error) => {
+    const signed = await within(COMMITS_MS, signedByTeam(gh, base, pr, pull, head)).catch((e: Error) => {
       console.warn(`could not read the commits on pull request ${pr}: ${e.message}`);
       return false;
     });
@@ -178,29 +176,24 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   };
 
   /**
-   * signedByTeam says whether every commit on the pull request that head has and this App's latest approval there
-   * lacks, or every commit on it when there is none, was committed by a team member with a signature GitHub verified.
-   * Commits the base brought in by a merge are not the pull request's, so they do not count.
+   * signedByTeam says whether every commit head has and the base it was read against lacks, less those this App's
+   * latest approval on the pull request already had, was committed by a team member with a signature GitHub verified.
+   * Both sets come from comparisons against head, so commits a merge brought in from the base do not count.
    */
-  const signedByTeam = async (gh: GitHub, base: string, pr: number, head: string): Promise<boolean> => {
-    const [bot, reviews, listed] = await Promise.all([
-      deps.bot(),
-      all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `${base}/pulls/${pr}/reviews`),
-      all<Signed>(gh, `${base}/pulls/${pr}/commits`, Math.ceil(MAX_PULL_COMMITS / 100)),
-    ]);
+  const signedByTeam = async (gh: GitHub, base: string, pr: number, pull: Pull, head: string): Promise<boolean> => {
+    const until = Date.now() + COMMITS_MS;
+    const ahead = async (from: string): Promise<Signed[]> => {
+      const cmp = await must(gh.rest<{ total_commits: number; commits: Signed[] }>("GET", `${base}/compare/${from}...${head}`), `compare ${from} with ${head}`);
+      if (cmp.commits.length < cmp.total_commits) throw new Error(`${cmp.total_commits} commits since ${from}, more than GitHub compares at once`);
+      return cmp.commits;
+    };
+    const [bot, reviews, own] = await Promise.all([deps.bot(), all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `${base}/pulls/${pr}/reviews`), ahead(pull.base.sha)]);
     const since = reviews.findLast((r) => r.state === "APPROVED" && r.user?.login === bot)?.commit_id;
-    let commits = listed;
-    if (commits.length >= MAX_PULL_COMMITS) return false;
-    if (since) {
-      const cmp = await gh.rest<{ total_commits: number; commits: { sha: string }[] }>("GET", `${base}/compare/${since}...${head}`);
-      if (cmp.status !== 200 || cmp.data.commits.length < cmp.data.total_commits) return false;
-      const fresh = new Set(cmp.data.commits.map((c) => c.sha));
-      commits = commits.filter((c) => fresh.has(c.sha));
-    }
+    const fresh = since ? new Set((await ahead(since)).map((c) => c.sha)) : undefined;
     const members = new Map<string, boolean>();
-    for (const c of commits) {
+    for (const c of own.filter((c) => fresh?.has(c.sha) ?? true)) {
       const login = c.committer?.login;
-      if (!c.commit.verification?.verified || !login) return false;
+      if (!c.commit.verification?.verified || !login || Date.now() > until) return false;
       if (!members.has(login)) members.set(login, await member(gh, login));
       if (!members.get(login)) return false;
     }

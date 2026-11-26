@@ -279,23 +279,24 @@ test("publish approves a team member's pull request, or a review a team member a
 test("publish approves with verified commits required only when every commit since the last approval is a team member's, signed", async () => {
   const [old, merged] = ["4".repeat(40), "5".repeat(40)];
   const commit = (sha: string, verified: boolean, login: string | null = "alice") => ({ sha, commit: { verification: { verified } }, committer: login === null ? null : { login } });
-  const commits = (...list: object[]) => ({ [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: ok(list) });
-  const approved = (compared: object) => ({
+  const compare = (from: string, commits: object[], total = commits.length) => ({ [`GET ${repo}/compare/${from}...${HEAD}`]: ok({ total_commits: total, commits }) });
+  const own = (...commits: object[]) => compare("c".repeat(40), commits);
+  const approved = (...commits: object[]) => ({
     [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([{ state: "APPROVED", commit_id: old, user: { login: "seidroid[bot]" } }, { state: "APPROVED", commit_id: old, user: { login: "alice" } }]),
-    [`GET ${repo}/compare/${old}...${HEAD}`]: ok(compared),
+    ...compare(old, commits),
   });
-  const many = Array.from({ length: 100 }, (_, i) => commit(i.toString(16).padStart(40, "0"), true));
   const cases: [string, Record<string, (body?: any) => Response>, boolean][] = [
-    ["a commit verified as a team member's", commits(commit(HEAD, true)), true],
-    ["an unsigned commit", commits(commit(HEAD, false)), false],
-    ["a commit verified as someone outside the team's", commits(commit(HEAD, true, "mallory")), false],
-    ["a verified commit GitHub ties to no account", commits(commit(HEAD, true, null)), false],
-    ["an unsigned commit before the last approval", { ...commits(commit(old, false), commit(HEAD, true)), ...approved({ total_commits: 1, commits: [{ sha: HEAD }] }) }, true],
-    ["an unsigned commit after the last approval", { ...commits(commit(old, true), commit(HEAD, false)), ...approved({ total_commits: 1, commits: [{ sha: HEAD }] }) }, false],
-    ["a merged base commit after the last approval", { ...commits(commit(old, true), commit(HEAD, true)), ...approved({ total_commits: 2, commits: [{ sha: merged }, { sha: HEAD }] }) }, true],
-    ["more commits since the approval than compared", { ...commits(commit(old, true), commit(HEAD, true)), ...approved({ total_commits: 300, commits: [{ sha: HEAD }] }) }, false],
-    ["more commits than GitHub lists", { ...commits(...many), [`GET ${repo}/pulls/7/commits?per_page=100&page=2`]: ok(many), [`GET ${repo}/pulls/7/commits?per_page=100&page=3`]: ok(many.slice(50)) }, false],
-    ["commits GitHub fails to list", { [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: () => ({ status: 502, data: {} }) }, false],
+    ["a commit verified as a team member's", own(commit(HEAD, true)), true],
+    ["an unsigned commit", own(commit(HEAD, false)), false],
+    ["an unsigned commit the pull request no longer lists", { ...own(commit(HEAD, false)), [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: ok([commit(HEAD, true)]) }, false],
+    ["a commit verified as someone outside the team's", own(commit(HEAD, true, "mallory")), false],
+    ["a verified commit GitHub ties to no account", own(commit(HEAD, true, null)), false],
+    ["an unsigned commit before the last approval", { ...own(commit(old, false), commit(HEAD, true)), ...approved(commit(HEAD, true)) }, true],
+    ["an unsigned commit after the last approval", { ...own(commit(old, true), commit(HEAD, false)), ...approved(commit(HEAD, false)) }, false],
+    ["an unsigned base commit merged after the last approval", { ...own(commit(old, true), commit(HEAD, true)), ...approved(commit(merged, false), commit(HEAD, true)) }, true],
+    ["more commits than GitHub compares", compare("c".repeat(40), [commit(HEAD, true)], 300), false],
+    ["more commits since the approval than GitHub compares", { ...own(commit(old, true), commit(HEAD, true)), ...approved(commit(HEAD, true)), ...compare(old, [commit(HEAD, true)], 300) }, false],
+    ["commits GitHub fails to compare", { [`GET ${repo}/compare/${"c".repeat(40)}...${HEAD}`]: () => ({ status: 502, data: {} }) }, false],
   ];
   for (const [name, routes, want] of cases) {
     const s = await serve({ ...base, ...routes });
@@ -314,7 +315,7 @@ test("publish approves with verified commits required only when every commit sin
 
 test("publish stops reading commits after thirty seconds and does not approve", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
-  const s = await serve({ ...base, [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: () => (setImmediate(() => mock.timers.tick(30_000)), new Promise(() => {})) as never });
+  const s = await serve({ ...base, [`GET ${repo}/compare/${"c".repeat(40)}...${HEAD}`]: () => (setImmediate(() => mock.timers.tick(30_000)), new Promise(() => {})) as never });
   try {
     assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true, requireVerifiedCommits: true })).status, 200);
     assert.deepEqual([s.published[0]!.target.approve, s.published[0]!.target.unapproved], [false, "commits"]);
