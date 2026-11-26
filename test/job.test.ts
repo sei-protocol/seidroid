@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { GitHub } from "../src/github.ts";
-import { besides, changedLines, changesSince, conversation, earlierFindings, FULL_READ_ABOVE, guard, keepsTranscripts, lastScouted, loadSession, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, saveSession, scout, scoutPlan, service, standingOf, type Event, type GuardOptions, type OwnReviews, type Standing } from "../src/job.ts";
+import { besides, changedLines, changesSince, conversation, earlierFindings, FULL_READ_ABOVE, guard, keepsTranscripts, lastScouted, loadSession, priorThreads, readsSince, recordInputs, requested, readAll, runsIn, saveSession, scout, scoutPlan, reviewedOf, service, type Event, type GuardOptions, type OwnReviews } from "../src/job.ts";
 import { MARKER } from "../src/render.ts";
 import { sha256 } from "../src/run.ts";
 import { guidelinesPath } from "../src/text.ts";
@@ -40,10 +40,10 @@ const team = async () => ({ actor: true, author: true });
 const unread: OwnReviews = async () => {
   throw new Error("only shadow reads its own check runs");
 };
-const ownChecks = (standing?: Standing): OwnReviews => async () => standing;
+const ownChecks = (reviewed: boolean): OwnReviews => async () => reviewed;
 const outsider = async () => ({ actor: false, author: true });
 
-test("guard admits what v1 admits and nothing more", async () => {
+test("guard admits one review per pull request, and later ones only when asked or with re-review on push", async () => {
   const shadow = { ...opts, shadow: true };
   const cases: [string, Event, GitHub, GuardOptions, boolean, RegExp, OwnReviews?][] = [
     ["first push", push("opened"), gh(), opts, true, /no review yet/],
@@ -56,7 +56,9 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["a reviewed push", push("synchronize"), gh({}, [verdict("APPROVED")]), opts, false, /already reviewed/],
     ["a reviewed reopen", push("reopened"), gh({}, [verdict("CHANGES_REQUESTED")]), opts, false, /already reviewed/],
     ["re-review on push", push("synchronize"), gh({}, [verdict("APPROVED")]), { ...opts, reReviewOnPush: true }, true, /re-reviews/],
-    ["a standing change request", push("synchronize"), gh({}, [verdict("APPROVED"), verdict("CHANGES_REQUESTED")]), opts, true, /lift/],
+    ["a reopen with re-review on push", push("reopened"), gh({}, [verdict("APPROVED")]), { ...opts, reReviewOnPush: true }, false, /already reviewed; comment @seidroid review/],
+    ["a standing change request", push("synchronize"), gh({}, [verdict("APPROVED"), verdict("CHANGES_REQUESTED")]), opts, false, /already reviewed/],
+    ["a change request with re-review on push", push("synchronize"), gh({}, [verdict("CHANGES_REQUESTED")]), { ...opts, reReviewOnPush: true }, true, /re-reviews/],
     ["someone else's review", push("synchronize"), gh({}, [{ state: "APPROVED", body: "lgtm", user: { type: "User" } }]), opts, true, /no review yet/],
     ["an outsider's push to a team member's pull request", push("synchronize", "mallory"), gh(), opts, true, /no review yet/],
     ["a team request", ask("@seidroid review"), gh({ draft: true }, [verdict("APPROVED")]), opts, true, /alice asked/],
@@ -66,10 +68,10 @@ test("guard admits what v1 admits and nothing more", async () => {
     ["no mention", ask("thanks seidroid"), gh(), opts, false, /does not ask/],
     ["a request on a fork", ask("@seidroid review"), gh({ head: { sha: "h", repo: { id: 2 } } }), opts, false, /fork/],
     ["another event", { name: "pull_request_target", actor: "alice", payload: { repository } }, gh(), opts, false, /does not start/],
-    ["v1's review in shadow", push("ready_for_review"), gh({}, [verdict("APPROVED")]), shadow, true, /no review yet/, ownChecks()],
-    ["v1's change request in shadow", push("synchronize"), gh({}, [verdict("CHANGES_REQUESTED")]), shadow, false, /already reviewed/, ownChecks("reviewed")],
-    ["its own review in shadow", push("reopened"), gh(), shadow, false, /already reviewed/, ownChecks("changes_requested")],
-    ["its own change request in shadow", push("synchronize"), gh({}, [verdict("APPROVED")]), shadow, true, /lift/, ownChecks("changes_requested")],
+    ["v1's review in shadow", push("ready_for_review"), gh({}, [verdict("APPROVED")]), shadow, true, /no review yet/, ownChecks(false)],
+    ["v1's change request in shadow", push("synchronize"), gh({}, [verdict("CHANGES_REQUESTED")]), shadow, false, /already reviewed/, ownChecks(true)],
+    ["its own review in shadow", push("reopened"), gh(), shadow, false, /already reviewed/, ownChecks(true)],
+    ["re-review on push in shadow", push("synchronize"), gh({}, [verdict("APPROVED")]), { ...shadow, reReviewOnPush: true }, true, /re-reviews/, ownChecks(true)],
   ];
   for (const [name, ev, client, o, run, reason, ownReviews = unread] of cases) {
     const gate = await guard(ev, o, client, ev.actor === "mallory" ? outsider : team, ownReviews);
@@ -85,11 +87,10 @@ test("guard admits what v1 admits and nothing more", async () => {
   assert.equal((await guard(ask("@seidroid review\nrun it", "renovate[bot]", "Bot"), opts, gh(), team, unread)).ask, "");
 });
 
-test("standingOf reads seidroid's latest review from the service's history and refuses a service too old to say", () => {
-  assert.equal(standingOf({ conclusion: null }), undefined);
-  assert.equal(standingOf({ conclusion: "failure" }), "changes_requested");
-  for (const conclusion of ["success", "neutral"]) assert.equal(standingOf({ conclusion }), "reviewed");
-  assert.throws(() => standingOf({}), /predates/);
+test("reviewedOf reads whether seidroid reviewed from the service's history and refuses a service too old to say", () => {
+  assert.equal(reviewedOf({ conclusion: null }), false);
+  for (const conclusion of ["success", "neutral", "failure"]) assert.equal(reviewedOf({ conclusion }), true);
+  assert.throws(() => reviewedOf({}), /predates/);
 });
 
 test("besides keeps a review request's text without its command lines", () => {

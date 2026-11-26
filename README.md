@@ -8,6 +8,13 @@ whole review.
 It is in development, and runs beside the current review in
 [`sei-protocol/uci`](https://github.com/sei-protocol/uci) without changing it.
 
+## When it reviews
+
+A pull request gets one review on its own, when it opens ready for review, turns ready or
+reopens. After that, including after a change request, a team member or an allowed bot asks
+for each review by commenting `@seidroid review`, unless the caller sets
+`re-review-on-push: true`, which reviews every push.
+
 ## Layout
 
 | Path | What it is |

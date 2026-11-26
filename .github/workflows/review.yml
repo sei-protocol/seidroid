@@ -68,7 +68,9 @@ on:
         type: string
         default: ''
       re-review-on-push:
-        description: Review every push, not only the first and those that may lift a change request.
+        description: >-
+          Review every push. Without it, a pull request is reviewed once, when it opens ready for review, turns ready or reopens,
+          and each later review, even one to lift a change request, needs a comment asking for it.
         type: boolean
         default: false
       review-model:
