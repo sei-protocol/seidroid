@@ -272,6 +272,20 @@ test("publish posts nothing on the code and never approves once the head has mov
   assert.deepEqual(blocked.of("POST /repos/o/r/pulls/7/reviews").map((x: any) => [x.event, x.comments.length]), [["REQUEST_CHANGES", 0]]);
 });
 
+test("publish comments with a note, rather than approving, a clean review that covers a push from outside the team", async () => {
+  const clean = fake({});
+  await publish(clean.gh, { ...T, approve: false, outsidePush: true }, { verdict: verdict({}) });
+  const [review] = clean.of("POST /repos/o/r/pulls/7/reviews");
+  assert.equal(review.event, "COMMENT");
+  assert.match(review.body, /^<!-- seidroid-review -->\n\*\*Posted as a comment.\*\* Not every push/);
+
+  const blocked = fake({});
+  await publish(blocked.gh, { ...T, approve: false, outsidePush: true }, { verdict: verdict({ inline_comments: [comment()] }) });
+  const [changes] = blocked.of("POST /repos/o/r/pulls/7/reviews");
+  assert.equal(changes.event, "REQUEST_CHANGES");
+  assert.doesNotMatch(changes.body, /Posted as a comment/);
+});
+
 test("publish withdraws an approval, and resolves nothing, when the head moved or went unread while it was posted", async () => {
   const approving = (heads: (string | null)[], dismissal = 200) => fake({
     "GET /repos/o/r/pulls/7": () => {

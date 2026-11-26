@@ -26,7 +26,11 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
   const tokens = new Map<string, Claims>();
   const gh: GitHub = {
     rest: async (method, path, body): Promise<any> => (routes[`${method} ${path}`] ?? (() => ({ status: 404, data: {} })))(body),
-    graphql: async (): Promise<any> => ({}),
+    graphql: async (_query, vars): Promise<any> => {
+      const res = (routes[`PUSHES ${vars.sha}`] ?? ok({}))();
+      if (res.status !== 200) throw new Error(`graphql: ${res.status}`);
+      return res.data;
+    },
   };
   let tick = async () => {};
   const h = handler(config, {
@@ -58,6 +62,9 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
 
 const ok = (data: object) => () => ({ status: 200, data });
 const repo = "/repos/sei-protocol/sei-chain";
+const NO_COMMIT = "0".repeat(40);
+/** pushed answers the check suites of a commit with the push that made it head; an empty suite carries none. */
+const pushed = (previousSha: string, login: string, type = "User") => ok({ repository: { object: { checkSuites: { totalCount: 2, nodes: [{ push: { previousSha, pusher: { __typename: type, login } } }, { push: null }] } } } });
 const base: Record<string, (body?: any) => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
   [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
@@ -67,6 +74,8 @@ const base: Record<string, (body?: any) => Response> = {
   [`GET ${repo}/commits/${MERGE}`]: ok({ parents: [{ sha: "c".repeat(40) }, { sha: HEAD }] }),
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${MERGE}`]: ok({ sha: "1".repeat(40) }),
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`]: ok({ sha: "1".repeat(40) }),
+  [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([]),
+  [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "alice"),
 };
 const submission = { read: 1, decision: "approve", summary: "Fine." };
 
@@ -258,6 +267,7 @@ test("publish approves for a pull_request run only the head it was started for",
     ...base,
     [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: later, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
     [`GET ${repo}/compare/${HEAD}...${later}`]: ok({ status: "ahead" }),
+    [`PUSHES ${later}`]: pushed(HEAD, "bob"),
   });
   try {
     for (const head of [HEAD, later]) assert.equal((await s.call("/publish", { pr: 7, head, outcome: { submission }, approve: true })).status, 200);
@@ -265,6 +275,34 @@ test("publish approves for a pull_request run only the head it was started for",
     assert.deepEqual(s.published.map((p) => [p.target.head, p.target.approve]), [[HEAD, true], [later, false], [later, true]]);
   } finally {
     s.close();
+  }
+});
+
+test("publish approves only when every push since the App's last approval came from the team or an allowed bot", async () => {
+  const [outside, onBase] = ["4".repeat(40), "5".repeat(40)];
+  const cases: [string, Record<string, (body?: any) => Response>, boolean][] = [
+    ["a team push from the branch's creation", {}, true],
+    ["an allowed bot's push", { [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "dependabot", "Bot") }, true],
+    ["a push from outside the team", { [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "mallory") }, false],
+    ["a team push on top of one from outside", { [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(NO_COMMIT, "mallory") }, false],
+    ["a team push on top of an approved commit", { [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(NO_COMMIT, "mallory"), [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([{ state: "APPROVED", commit_id: outside, user: { login: "seidroid[bot]" } }]) }, true],
+    ["a team push on top of a dismissed approval", { [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(NO_COMMIT, "mallory"), [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([{ state: "DISMISSED", commit_id: outside, user: { login: "seidroid[bot]" } }]) }, false],
+    ["a team push on top of the base", { [`PUSHES ${HEAD}`]: pushed(onBase, "alice"), [`GET ${repo}/compare/${onBase}...${"c".repeat(40)}`]: ok({ status: "ahead" }) }, true],
+    ["a commit with no recorded push", { [`PUSHES ${HEAD}`]: ok({ repository: { object: null } }) }, false],
+    ["a commit with two different pushes", { [`PUSHES ${HEAD}`]: ok({ repository: { object: { checkSuites: { totalCount: 2, nodes: [{ push: { previousSha: NO_COMMIT, pusher: { __typename: "User", login: "alice" } } }, { push: { previousSha: outside, pusher: { __typename: "User", login: "alice" } } }] } } } }) }, false],
+    ["a commit with more check suites than read", { [`PUSHES ${HEAD}`]: ok({ repository: { object: { checkSuites: { totalCount: 101, nodes: [{ push: { previousSha: NO_COMMIT, pusher: { __typename: "User", login: "alice" } } }] } } } }) }, false],
+    ["pushes that never end", { [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(HEAD, "alice") }, false],
+    ["pushes GitHub fails to read", { [`PUSHES ${HEAD}`]: () => ({ status: 502, data: {} }) }, false],
+  ];
+  for (const [name, routes, want] of cases) {
+    const s = await serve({ ...base, ...routes });
+    try {
+      for (const c of [claims(), claims({ event_name: "issue_comment", ref: "refs/heads/main" })]) assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, c)).status, 200, name);
+      await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
+      assert.deepEqual(s.published.map((p) => [p.target.approve, p.target.outsidePush]), [[want, !want], [want, !want], [false, false]], name);
+    } finally {
+      s.close();
+    }
   }
 });
 

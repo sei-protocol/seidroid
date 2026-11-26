@@ -106,6 +106,21 @@ const MAX_REQUEST = 1 << 20;
 const COMPARE_EVERY_MS = 2 * 60_000;
 const SHA = /^[0-9a-f]{40}$/;
 const CALLER = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+const NO_COMMIT = "0".repeat(40);
+const MAX_PUSHES = 50;
+
+/** PUSHES reads the pushes GitHub recorded on a commit's check suites: the push that made it a branch's head. */
+const PUSHES = `query($owner: String!, $repo: String!, $sha: GitObjectID!) {
+  repository(owner: $owner, name: $repo) { object(oid: $sha) { ... on Commit { checkSuites(first: 100) {
+    totalCount nodes { push { previousSha pusher { __typename login } } }
+  } } } }
+}`;
+
+interface Push {
+  previousSha: string;
+  pusher: { __typename: string; login: string } | null;
+}
+const key = (p: Push): string => `${p.previousSha} ${p.pusher?.__typename} ${p.pusher?.login}`;
 
 /** handler serves the seidroid service: the runner proves which workflow run it is with its OIDC token, and the service acts as the App. */
 export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
@@ -149,6 +164,34 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
   const mergeParents = async (gh: GitHub, claims: Claims): Promise<string[]> => {
     const merge = SHA.test(claims.sha) ? await gh.rest<{ parents?: { sha: string }[] }>("GET", `/repos/${claims.repository}/commits/${claims.sha}`) : undefined;
     return merge?.status === 200 ? (merge.data.parents ?? []).map((p) => p.sha) : [];
+  };
+
+  /**
+   * pushedByTeam says whether every push to the pull request's branch that led to head, back to a commit this App
+   * approved, the branch's creation or a commit on the base, was made by the team or an allowed bot. A commit
+   * with no recorded push, or with differing ones, counts against it.
+   */
+  const pushedByTeam = async (gh: GitHub, owner: string, repo: string, pr: number, pull: Pull, head: string): Promise<boolean> => {
+    const base = `/repos/${owner}/${repo}`;
+    const bot = await deps.bot();
+    const reviews = await all<{ state: string; commit_id: string; user: { login: string } | null }>(gh, `${base}/pulls/${pr}/reviews`);
+    const approved = new Set(reviews.filter((r) => r.state === "APPROVED" && r.user?.login === bot).map((r) => r.commit_id));
+    const admitted = new Map<string, boolean>();
+    for (let sha = head, n = 0; n < MAX_PUSHES; n++) {
+      if (sha === NO_COMMIT || approved.has(sha)) return true;
+      const onBase = await gh.rest<{ status: string }>("GET", `${base}/compare/${sha}...${pull.base.sha}`);
+      if (onBase.status === 200 && ["ahead", "identical"].includes(onBase.data.status)) return true;
+      const suites = (await gh.graphql<any>(PUSHES, { owner, repo, sha })).repository?.object?.checkSuites;
+      if (!suites || suites.nodes.length < suites.totalCount) return false;
+      const pushes: Push[] = suites.nodes.flatMap((s: { push: Push | null }) => (s.push ? [s.push] : []));
+      const [p] = pushes;
+      if (!p?.pusher || pushes.some((q) => key(q) !== key(p))) return false;
+      const pusher = p.pusher.__typename === "Bot" ? `${p.pusher.login}[bot]` : p.pusher.login;
+      if (!admitted.has(pusher)) admitted.set(pusher, await admits(gh, pusher));
+      if (!admitted.get(pusher)) return false;
+      sha = p.previousSha;
+    }
+    return false;
   };
 
   /** callerOnBase says whether a pull_request run's calling workflow is the same file as on the base of the merge it runs on. */
@@ -323,8 +366,14 @@ export function handler(cfg: Config, deps: Deps): (req: IncomingMessage, res: Se
       const shadow = body.shadow !== false;
       const compared = cmp && shadow;
       // A push run approves only the head it was started for, which a re-run or a later push may have moved past.
-      const approve = body.approve === true && (claims.event_name !== "pull_request" || (await mergeParents(gh, claims))[1] === body.head);
-      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
+      const asked = body.approve === true && (claims.event_name !== "pull_request" || (await mergeParents(gh, claims))[1] === body.head);
+      const approve =
+        asked &&
+        (await pushedByTeam(gh, owner, repo, pr, pull, body.head).catch((e: Error) => {
+          console.warn(`could not read the pushes to pull request ${pr}: ${e.message}`);
+          return false;
+        }));
+      const target = { owner, repo, pr, head: body.head, bot: await deps.bot(), runUrl, checkName: cfg.checkName, includeNits: body.includeNits === true, shadow, aiReviewCheck: !shadow && body.aiReviewCheck === true, approve, outsidePush: asked && !approve, externalId: compared ? pending(seconds(body.durationMs)) : undefined };
       const outcome = await outcomeOf(gh, base, pull.base.sha, body.outcome, guidelinesPath(body.guidelines));
       const report = await deps.publish(gh, target, outcome);
       observe(m, claims, target.shadow, target.includeNits, outcome, report, body);
