@@ -28,7 +28,16 @@ interface CheckRun {
   completed_at: string | null;
   external_id?: string | null;
   app: { slug: string } | null;
-  output: { title: string | null };
+  output: { title: string | null; summary: string | null; text: string | null };
+}
+
+/**
+ * settlement is the update that settles a v2 check run under externalId. An update that leaves out the output drops
+ * its text, which holds the findings /history reads the review back from, so a run with text sends its output back.
+ */
+export function settlement(run: Pick<CheckRun, "output">, externalId: string): object {
+  const { title, summary, text } = run.output;
+  return text ? { external_id: externalId, output: { title, summary, text } } : { external_id: externalId };
 }
 
 /** The notice v1's guard leaves when a pull request already carries its verdict and a push does not earn another. */
@@ -217,7 +226,7 @@ export function comparer(m: Metrics, cfg: CompareConfig & { checkName: string },
   }
 
   async function settle(gh: GitHub, owner: string, repo: string, run: CheckRun, externalId: string): Promise<void> {
-    const res = await gh.rest("PATCH", `/repos/${owner}/${repo}/check-runs/${run.id}`, { external_id: externalId });
+    const res = await gh.rest("PATCH", `/repos/${owner}/${repo}/check-runs/${run.id}`, settlement(run, externalId));
     if (res.status !== 200) throw new Error(`could not settle check run ${run.id}: ${res.status}`);
   }
 

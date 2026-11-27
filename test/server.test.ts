@@ -160,7 +160,7 @@ test("publish records the review and the job's model runs in the metrics, and co
   const checks = `${repo}/commits/${HEAD}/check-runs`;
   const v1 = { id: 1, status: "completed", conclusion: "failure", started_at: "2026-11-15T10:00:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "seidroid" }, output: { title: "2 findings" } };
   const job = { id: 2, status: "completed", conclusion: "success", started_at: "2026-11-15T09:50:00Z", completed_at: "2026-11-15T10:00:00Z", app: { slug: "github-actions" }, output: { title: null } };
-  const v2 = { id: 3, status: "completed", conclusion: "success", started_at: "2026-11-15T10:01:00Z", completed_at: "2026-11-15T10:01:00Z", external_id: "compare:pending:90", app: { slug: "seidroid" }, output: { title: "2 findings" } };
+  const v2 = { id: 3, status: "completed", conclusion: "success", started_at: "2026-11-15T10:01:00Z", completed_at: "2026-11-15T10:01:00Z", external_id: "compare:pending:90", app: { slug: "seidroid" }, output: { title: "2 findings", summary: "sum", text: "record" } };
   const settled: unknown[] = [];
   const s = await serve(
     {
@@ -182,7 +182,7 @@ test("publish records the review and the job's model runs in the metrics, and co
     await s.call("/publish", { pr: 7, head: HEAD, outcome: { failure: "the review did not finish: timed out after 1200s" }, shadow: false });
     assert.deepEqual(s.published.map((p) => p.target.externalId), ["compare:pending:90", undefined]);
     await s.tick();
-    assert.deepEqual(settled, [{ external_id: "compare:v1:1" }]);
+    assert.deepEqual(settled, [{ external_id: "compare:v1:1", output: { title: "2 findings", summary: "sum", text: "record" } }]);
     const m = await s.metrics();
     for (const line of [
       'seidroid_reviews_total{repo="sei-protocol/sei-chain",mode="shadow",trigger="push",conclusion="success",settled="review"} 1',
