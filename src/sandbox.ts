@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
 
 /** Where a runner keeps what a command must not see: other users' homes, runtime sockets such as Docker's, and scratch disks. */
 const HIDDEN = ["/tmp", "/home", "/root", "/run", "/mnt"];
@@ -17,8 +18,8 @@ export interface Jail {
 
 /**
  * bwrapArgs confines a command with bubblewrap: the machine read-only, its runtime and homes
- * hidden except readOnly, only work, home and a fresh /tmp writable, no other process
- * visible, an empty environment, and no network unless net is set.
+ * hidden except readOnly, only work, home and a fresh /tmp writable but work's .git read-only,
+ * no other process visible, an empty environment, and no network unless net is set.
  */
 export function bwrapArgs(j: Jail, cwd = j.work): string[] {
   return [
@@ -27,7 +28,8 @@ export function bwrapArgs(j: Jail, cwd = j.work): string[] {
     ...HIDDEN.filter((d) => existsSync(d)).flatMap((d) => ["--tmpfs", d]),
     ...(j.net ? ["--ro-bind-try", "/run/systemd/resolve", "/run/systemd/resolve"] : []),
     ...(j.readOnly ? ["--ro-bind", j.readOnly, j.readOnly] : []),
-    "--bind", j.home, j.home, "--bind", j.work, j.work, "--chdir", cwd,
+    "--bind", j.home, j.home, "--bind", j.work, j.work,
+    "--ro-bind-try", path.join(j.work, ".git"), path.join(j.work, ".git"), "--chdir", cwd,
     "--clearenv", "--setenv", "PATH", j.path, "--setenv", "HOME", j.home, "--setenv", "TMPDIR", "/tmp", "--setenv", "LANG", "C.UTF-8",
   ];
 }
