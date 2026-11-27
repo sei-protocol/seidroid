@@ -558,7 +558,7 @@ async function review(o: Record<string, string>): Promise<void> {
   } finally {
     if (sessionDir && session !== "off") await saveSession(o.service, of, sessionDir);
   }
-  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started, session });
+  const report = await service(o.service, "/publish", { pr, head: pull.head.sha, outcome, includeNits, shadow: o.shadow !== "false", aiReviewCheck: o["ai-review-check"] === "true", approve: o["approve-on-success"] === "true", requireVerifiedCommits: o["require-verified-commits"] === "true", guidelines, runs: runsIn(o.out), durationMs: Date.now() - started, session });
   console.log(JSON.stringify(report));
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `conclusion=${report.conclusion}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `seidroid: ${report.conclusion}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\`\n`);
@@ -602,7 +602,7 @@ async function react(o: Record<string, string>): Promise<void> {
 
 const OPTIONS = [
   "service", "trigger-phrase", "skip-review-label", "re-review-on-push", "allowed-bots",
-  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "guidelines-file", "ask", "private",
+  "pr", "head", "work", "out", "session-dir", "review-model", "scout-models", "thinking", "timeout-seconds", "nitpick-label", "extra-instructions", "shadow", "comment", "ai-review-check", "state", "home", "prepare", "approve-on-success", "require-verified-commits", "guidelines-file", "ask", "private",
 ];
 
 async function main(): Promise<void> {

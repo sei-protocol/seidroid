@@ -26,11 +26,7 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
   const tokens = new Map<string, Claims>();
   const gh: GitHub = {
     rest: async (method, path, body): Promise<any> => (routes[`${method} ${path}`] ?? (() => ({ status: 404, data: {} })))(body),
-    graphql: async (_query, vars): Promise<any> => {
-      const res = (routes[`PUSHES ${vars.sha}`] ?? ok({}))();
-      if (res.status !== 200) throw new Error(`graphql: ${res.status}`);
-      return res.data;
-    },
+    graphql: async (): Promise<any> => ({}),
   };
   let tick = async () => {};
   const h = handler(config, {
@@ -62,15 +58,9 @@ async function serve(routes: Record<string, (body?: any) => Response>, config: C
 
 const ok = (data: object) => () => ({ status: 200, data });
 const repo = "/repos/sei-protocol/sei-chain";
-const NO_COMMIT = "0".repeat(40);
-/** suites answers a commit that is ahead of the base with the given check suites. */
-const suites = (...nodes: object[]) => ok({ repository: { ref: { compare: { status: "AHEAD" } }, object: { checkSuites: { totalCount: nodes.length, nodes } } } });
-const suite = (previousSha: string, login: string, type = "User", branch = "feature") => ({ branch: { name: branch }, push: { previousSha, pusher: { __typename: type, login } } });
-/** pushed answers a commit with the push to the pull request's branch that made it head, beside a suite with none. */
-const pushed = (previousSha: string, login: string, type = "User") => suites(suite(previousSha, login, type), { branch: { name: "feature" }, push: null });
 const base: Record<string, (body?: any) => Response> = {
   [`GET /repos/sei-protocol/seidroid/compare/${"a".repeat(40)}...main`]: ok({ status: "ahead" }),
-  [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, ref: "feature", repo: { id: 1 } }, base: { sha: "c".repeat(40), ref: "main", repo: { id: 1 } }, user: { login: "bob" } }),
+  [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
   [`GET ${repo}/contents/REVIEW.md?ref=${"c".repeat(40)}`]: ok({ content: Buffer.from("## Accepted\n- the legacy store keeps its lock\n").toString("base64") }),
   "GET /orgs/sei-protocol/teams/eng/memberships/alice": ok({ state: "active" }),
   "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "active" }),
@@ -78,7 +68,6 @@ const base: Record<string, (body?: any) => Response> = {
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${MERGE}`]: ok({ sha: "1".repeat(40) }),
   [`GET ${repo}/contents/.github/workflows/seidroid.yml?ref=${"c".repeat(40)}`]: ok({ sha: "1".repeat(40) }),
   [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([]),
-  [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "alice"),
 };
 const submission = { read: 1, decision: "approve", summary: "Fine." };
 
@@ -236,7 +225,7 @@ test("publish refuses a pull_request run whose pull request changes its workflow
   }
 });
 
-test("publish takes a pull_request run only on a team member's pull request, whoever pushed, and approves only a team member's push", async () => {
+test("publish takes a pull_request run only on a team member's pull request, whoever pushed", async () => {
   const s = await serve({ ...base, "GET /orgs/sei-protocol/teams/eng/memberships/bob": ok({ state: "pending" }) });
   try {
     const r = await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
@@ -246,30 +235,14 @@ test("publish takes a pull_request run only on a team member's pull request, who
   } finally {
     s.close();
   }
-  for (const [actor, login, type, approve] of [
-    ["alice", "alice", "User", true],
-    ["mallory", "mallory", "User", false],
-    ["dependabot[bot]", "dependabot", "Bot", false],
-    ["devin-ai-integration[bot]", "devin-ai-integration", "Bot", false],
-  ] as const) {
-    const t = await serve({ ...base, [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, login, type) });
-    try {
-      const r = await t.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, claims({ actor }));
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.equal(t.published[0].target.approve, approve, actor);
-    } finally {
-      t.close();
-    }
-  }
 });
 
 test("publish approves for a pull_request run only the head it was started for", async () => {
   const later = "e".repeat(40);
   const s = await serve({
     ...base,
-    [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: later, ref: "feature", repo: { id: 1 } }, base: { sha: "c".repeat(40), ref: "main", repo: { id: 1 } }, user: { login: "bob" } }),
+    [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: later, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "bob" } }),
     [`GET ${repo}/compare/${HEAD}...${later}`]: ok({ status: "ahead" }),
-    [`PUSHES ${later}`]: pushed(HEAD, "bob"),
   });
   try {
     for (const head of [HEAD, later]) assert.equal((await s.call("/publish", { pr: 7, head, outcome: { submission }, approve: true })).status, 200);
@@ -280,46 +253,72 @@ test("publish approves for a pull_request run only the head it was started for",
   }
 });
 
-test("publish approves only when a team member made every push since the App's last approval", async () => {
-  const [outside, onBase] = ["4".repeat(40), "5".repeat(40)];
-  const approval = (state: string) => ({ [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([{ state, commit_id: outside, user: { login: "seidroid[bot]" } }]) });
-  const under = (login: string) => ({ [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(NO_COMMIT, login) });
-  const cases: [string, Record<string, (body?: any) => Response>, boolean][] = [
-    ["a team push from the branch's creation", {}, true],
-    ["a team push on top of another", under("bob"), true],
-    ["an allowed bot's push", { [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "dependabot", "Bot") }, false],
-    ["a push from outside the team", { [`PUSHES ${HEAD}`]: pushed(NO_COMMIT, "mallory") }, false],
-    ["a team push on top of one from outside", under("mallory"), false],
-    ["a team push on top of an approved commit", { ...under("mallory"), ...approval("APPROVED") }, true],
-    ["a team push on top of a dismissed approval", { ...under("mallory"), ...approval("DISMISSED") }, false],
-    ["a team push on top of the base", { [`PUSHES ${HEAD}`]: pushed(onBase, "alice"), [`PUSHES ${onBase}`]: ok({ repository: { ref: { compare: { status: "BEHIND" } }, object: null } }) }, true],
-    ["a team push also made to another branch", { [`PUSHES ${HEAD}`]: suites(suite(NO_COMMIT, "alice"), suite(outside, "mallory", "User", "stacked")) }, true],
-    ["a commit pushed only to another branch", { [`PUSHES ${HEAD}`]: suites(suite(NO_COMMIT, "alice", "User", "stacked")) }, false],
-    ["a commit with no recorded push", { [`PUSHES ${HEAD}`]: ok({ repository: { ref: { compare: { status: "AHEAD" } }, object: null } }) }, false],
-    ["a commit with two different pushes", { [`PUSHES ${HEAD}`]: suites(suite(NO_COMMIT, "alice"), suite(outside, "alice")) }, false],
-    ["a commit with more check suites than read", { [`PUSHES ${HEAD}`]: ok({ repository: { object: { checkSuites: { totalCount: 101, nodes: [suite(NO_COMMIT, "alice")] } } } }) }, false],
-    ["pushes that never end", { [`PUSHES ${HEAD}`]: pushed(outside, "alice"), [`PUSHES ${outside}`]: pushed(HEAD, "alice") }, false],
-    ["pushes GitHub fails to read", { [`PUSHES ${HEAD}`]: () => ({ status: 502, data: {} }) }, false],
+test("publish approves a team member's pull request, or a review a team member asks for, but not one an allowed bot asks for", async () => {
+  const asked = (actor: string): Partial<Claims> => ({ actor, event_name: "issue_comment", ref: "refs/heads/main" });
+  const byBot = { [`GET ${repo}/pulls/7`]: ok({ state: "open", head: { sha: HEAD, repo: { id: 1 } }, base: { sha: "c".repeat(40), repo: { id: 1 } }, user: { login: "dependabot[bot]" } }) };
+  const cases: [string, Record<string, (body?: any) => Response>, Partial<Claims>, boolean][] = [
+    ["a bot's push to a team member's pull request", {}, { actor: "devin-ai-integration[bot]" }, true],
+    ["a push from outside the team to a team member's pull request", {}, { actor: "mallory" }, true],
+    ["a push to an allowed bot's pull request", byBot, { actor: "dependabot[bot]" }, false],
+    ["a team member's comment", {}, asked("alice"), true],
+    ["a team member's comment on an allowed bot's pull request", byBot, asked("alice"), true],
+    ["an allowed bot's comment", {}, asked("dependabot[bot]"), false],
   ];
-  for (const [name, routes, want] of cases) {
+  for (const [name, routes, over, want] of cases) {
     const s = await serve({ ...base, ...routes });
     try {
-      for (const c of [claims(), claims({ event_name: "issue_comment", ref: "refs/heads/main" })]) assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, c)).status, 200, name);
-      await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } });
-      assert.deepEqual(s.published.map((p) => [p.target.approve, p.target.unconfirmedPushes]), [[want, !want], [want, !want], [false, false]], name);
+      assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true }, claims(over))).status, 200, name);
+      await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission } }, claims(over));
+      assert.deepEqual(s.published.map((p) => [p.target.approve, p.target.unapproved]), [[want, want ? undefined : "requester"], [false, undefined]], name);
     } finally {
       s.close();
     }
   }
 });
 
-test("publish stops reading pushes after thirty seconds and does not approve", async () => {
-  mock.timers.enable({ apis: ["Date"] });
-  const slow = (r: () => Response) => () => (mock.timers.tick(15_001), r());
-  const s = await serve({ ...base, [`PUSHES ${HEAD}`]: slow(pushed("4".repeat(40), "alice")), [`PUSHES ${"4".repeat(40)}`]: slow(pushed(NO_COMMIT, "alice")) });
+test("publish approves with verified commits required only when every commit since the last approval is a team member's, signed", async () => {
+  const [old, merged] = ["4".repeat(40), "5".repeat(40)];
+  const commit = (sha: string, verified: boolean, login: string | null = "alice") => ({ sha, commit: { verification: { verified } }, committer: login === null ? null : { login } });
+  const compare = (from: string, commits: object[], total = commits.length) => ({ [`GET ${repo}/compare/${from}...${HEAD}`]: ok({ total_commits: total, commits }) });
+  const own = (...commits: object[]) => compare("c".repeat(40), commits);
+  const approved = (...commits: object[]) => ({
+    [`GET ${repo}/pulls/7/reviews?per_page=100&page=1`]: ok([{ state: "APPROVED", commit_id: old, user: { login: "seidroid[bot]" } }, { state: "APPROVED", commit_id: old, user: { login: "alice" } }]),
+    ...compare(old, commits),
+  });
+  const cases: [string, Record<string, (body?: any) => Response>, boolean][] = [
+    ["a commit verified as a team member's", own(commit(HEAD, true)), true],
+    ["an unsigned commit", own(commit(HEAD, false)), false],
+    ["an unsigned commit the pull request no longer lists", { ...own(commit(HEAD, false)), [`GET ${repo}/pulls/7/commits?per_page=100&page=1`]: ok([commit(HEAD, true)]) }, false],
+    ["a commit verified as someone outside the team's", own(commit(HEAD, true, "mallory")), false],
+    ["a verified commit GitHub ties to no account", own(commit(HEAD, true, null)), false],
+    ["an unsigned commit before the last approval", { ...own(commit(old, false), commit(HEAD, true)), ...approved(commit(HEAD, true)) }, true],
+    ["an unsigned commit after the last approval", { ...own(commit(old, true), commit(HEAD, false)), ...approved(commit(HEAD, false)) }, false],
+    ["an unsigned base commit merged after the last approval", { ...own(commit(old, true), commit(HEAD, true)), ...approved(commit(merged, false), commit(HEAD, true)) }, true],
+    ["more commits than GitHub compares", compare("c".repeat(40), [commit(HEAD, true)], 300), false],
+    ["more commits since the approval than GitHub compares", { ...own(commit(old, true), commit(HEAD, true)), ...approved(commit(HEAD, true)), ...compare(old, [commit(HEAD, true)], 300) }, false],
+    ["commits GitHub fails to compare", { [`GET ${repo}/compare/${"c".repeat(40)}...${HEAD}`]: () => ({ status: 502, data: {} }) }, false],
+  ];
+  for (const [name, routes, want] of cases) {
+    const s = await serve({ ...base, ...routes });
+    try {
+      for (const c of [claims(), claims({ event_name: "issue_comment", ref: "refs/heads/main" })]) {
+        assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true, requireVerifiedCommits: true }, c)).status, 200, name);
+      }
+      await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true });
+      const held = want ? undefined : "commits";
+      assert.deepEqual(s.published.map((p) => [p.target.approve, p.target.unapproved]), [[want, held], [want, held], [true, undefined]], name);
+    } finally {
+      s.close();
+    }
+  }
+});
+
+test("publish stops reading commits after thirty seconds and does not approve", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const s = await serve({ ...base, [`GET ${repo}/compare/${"c".repeat(40)}...${HEAD}`]: () => (setImmediate(() => mock.timers.tick(30_000)), new Promise(() => {})) as never });
   try {
-    assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true })).status, 200);
-    assert.equal(s.published[0].target.approve, false);
+    assert.equal((await s.call("/publish", { pr: 7, head: HEAD, outcome: { submission }, approve: true, requireVerifiedCommits: true })).status, 200);
+    assert.deepEqual([s.published[0]!.target.approve, s.published[0]!.target.unapproved], [false, "commits"]);
   } finally {
     s.close();
     mock.timers.reset();
